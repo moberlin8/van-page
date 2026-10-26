@@ -941,8 +941,7 @@ function dishSection(d) {
       <span class="v"><span class="led ${d.state === "CONNECTED" ? "ok" : "bad"}"
         title="dish link state -- ${esc(d.state || "unknown")}"></span></span></div>
     <div class="r"><span class="k">Signal To Noise Ratio</span>
-      <span class="led ${ok === true ? "ok" : ok === false ? "bad" : ""}"
-        title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
+      ${(ok === true || ok === false) ? `<span class="led ${ok ? "ok" : "bad"}" title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span>` : ""}</div>
     <div class="r"><span class="k">Alerts</span>
       ${d.alerts ? `<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>` : ""}</div>
     <!-- Ada 24-Oct-2026 the packet-loss percentage lives here, right below
