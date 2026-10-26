@@ -1019,7 +1019,7 @@ function dishSection(d) {
           aria-label="About usage">i<span class="tip" role="tooltip">
       <p><b>Usage</b> &mdash; bytes moved over the current billing period.
         Starlink bills on a cycle anchored to the day the kit was activated, so
-        the period runs the 25th of one month to the 24th of the next, in UTC.</p>
+        the period runs the 21st of one month to the 20th of the next, in UTC.</p>
       <p>The dish&rsquo;s own usage counters are <b>rolling</b>, not cumulative
         &mdash; over two days the download counter gained 3301 MB and lost
         3297 MB. So this is the sum of the counter&rsquo;s increases, which is
@@ -1031,6 +1031,14 @@ function dishSection(d) {
       <span class="v" id="usg-up">&mdash;</span></div>
     <div class="r"><span class="k">Total</span>
       <span class="v big" id="usg-total">&mdash;</span></div>
+    <div class="r"><span class="k">% Used (100 GB)</span>
+      <span class="v" id="usg-pct-used">&mdash;</span></div>
+    <div class="r"><span class="k">% to Cap (50 GB)</span>
+      <span class="v" id="usg-pct-cap">&mdash;</span></div>
+    <div class="r"><span class="k">Remaining</span>
+      <span class="v" id="usg-remaining">&mdash;</span></div>
+    <div class="r"><span class="k">Status</span>
+      <span class="v" id="usg-status">&mdash;</span></div>
     <div class="r"><span class="k">Period</span>
       <span class="v" id="usg-period">&mdash;</span></div>
     <div class="r"><span class="k">Days Left</span>
@@ -1361,7 +1369,9 @@ async function load() {
   // content and put it straight back after the re-render.
   const keep = {};
   for (const el of [$("#tput"), $("#usg-down"), $("#usg-up"), $("#usg-total"),
-                   $("#usg-period"), $("#usg-days"), $("#usg-since")]) {
+                   $("#usg-period"), $("#usg-days"), $("#usg-since"),
+                   $("#usg-pct-used"), $("#usg-pct-cap"), $("#usg-remaining"),
+                   $("#usg-status")]) {
     if (el) keep[el.id] = el.innerHTML;
   }
   var dsh = $("#dish");
@@ -1839,6 +1849,33 @@ const usageDay = (ts) => {
 const usageGB = (bytes) => bytes == null ? "&mdash;"
   : (bytes / 1e9).toFixed(2) + " GB";
 
+const USAGE_PLAN_GB = 100, USAGE_CAP_GB = 50;
+// Matt: projection rows (% of 100 GB plan, % to 50 GB cap, remaining GB, band).
+// The band colour is a CHILD <span> (not the element's className) so it survives
+// load()'s 15s re-render: keep/restore round-trips innerHTML (children), which is
+// why the colour lives on the span inside usg-* rather than on usg-* itself.
+function renderUsageProjection(totalBytes) {
+  const ids = ["usg-pct-used", "usg-pct-cap", "usg-remaining", "usg-status"];
+  const usedGB = totalBytes == null || isNaN(totalBytes) ? null : totalBytes / 1e9;
+  if (usedGB == null) {
+    for (const id of ids) { const e = $(id); if (e) e.innerHTML = "&mdash;"; }
+    return;
+  }
+  const pctPlan = (usedGB / USAGE_PLAN_GB) * 100;
+  const pctCap  = (usedGB / USAGE_CAP_GB) * 100;
+  const remGB   = USAGE_PLAN_GB - usedGB;
+  const cls = usedGB < 30 ? "ok" : (usedGB < 50 ? "warn" : "bad");
+  const label = cls === "ok" ? "Within 100 GB plan"
+    : cls === "warn" ? "Approaching Data throttle zone"
+    : "Data throttle limit exceeded";
+  const child = (v) => '<span class="' + cls + '">' + esc(v) + '</span>';
+  const setv = (id, v) => { const e = $(id); if (e) e.innerHTML = child(v); };
+  setv("usg-pct-used", pctPlan.toFixed(1) + "%");
+  setv("usg-pct-cap",  pctCap.toFixed(1) + "%");
+  setv("usg-remaining", remGB.toFixed(1) + " GB");
+  setv("usg-status", label);
+}
+
 async function loadUsage() {
   try {
     const r = await fetch(USAGE_URL + "?t=" + Date.now(), { cache: "no-store" });
@@ -1854,12 +1891,17 @@ async function loadUsage() {
       : u.days_left + (u.days_left === 1 ? " day" : " days");
     // The database only started collecting on 22-Oct-2026, so say what part of
     // the period the total actually covers rather than claiming a full month.
-    $("usg-since").textContent = usageDay(u.covered_from);
+    $("#usg-since").textContent = usageDay(u.covered_from);
+    renderUsageProjection(u.total);
   } catch (e) {
     for (const id of ["usg-down", "usg-up", "usg-total", "usg-period",
                       "usg-days", "usg-since"]) {
       const el = $(id);
       if (el) el.textContent = "&mdash;";
+    }
+    for (const id of ["usg-pct-used", "usg-pct-cap", "usg-remaining", "usg-status"]) {
+      const el = $(id);
+      if (el) el.innerHTML = "&mdash;";
     }
   }
 }
