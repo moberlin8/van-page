@@ -5,6 +5,7 @@
      Ada 26-Oct-2026 Failover box: renamed the "Repeat" row label to "Repeater".
      Ada 26-Oct-2026 Failover box: relabeled third row "TETHER" -> "CELLULAR" (wwan data).
      Ada 26-Oct-2026 Failover box: "WAN" -> "WAN Port" (ETH1); restored third row to TETHER (wwan is the REPEATER/WirelessWAN, not CELL).
+     Ada 26-Oct-2026 Failover box tooltip: wwan is the WirelessWAN repeater (not the cellular modem); noted the dual-SIM cell modem as a separate, disabled-on-build WAN source.
      Ada 26-Oct-2026 L700 clean(): regex /"//g -> /"/g. The doubled slash made
      clean() evaluate to a division by an undefined `g`, throwing ReferenceError
      at call time and blanking the Delilah router panel (dish was unaffected).
@@ -1239,12 +1240,13 @@ function routerSection(r) {
     <!-- Ada 24-Oct-2026 the failover box moved up to sit right after resources
          (Matt); it used to come after the cellular modem box. -->
     ${box("failover",
-      `<p>Delilah keeps three links and picks one: the WAN port (eth0), the
-        cellular modem (wwan${w.wwan_device ? " on " + esc(w.wwan_device) : ""}), or
-        a tethered phone. The active link carries the traffic and the others stand
-        by. The metric is the failover priority &mdash; lower wins. Sensitivity is
-        ${esc(r.kmwan_sensitivity || "?")} ms. <b>WAN Uptime</b> is how long the
-        WAN link has been up.</p>`,
+      `<p>Delilah keeps three failover links and picks one: the WAN port (eth0/ETH1), the
+        wireless repeater (wwan/WirelessWAN${w.wwan_device ? " on " + esc(w.wwan_device) : ""}),
+        or a tethered phone. The cellular modem (two SIM slots, one or both possibly
+        disabled) is another WAN source, but is disabled on this build. The active
+        link carries the traffic and the others stand by. The metric is the failover
+        priority &mdash; lower wins. Sensitivity is ${esc(r.kmwan_sensitivity || "?")} ms.
+        <b>WAN Uptime</b> is how long the active WAN link has been up.</p>`,
       [
         row("WAN Port", updown(!!r.kmwan_wan_up, r.kmwan_active === "wan"), "col"),
         row("Repeater", updown(r.kmwan_active === "wwan", r.kmwan_active === "wwan"), "col"),
