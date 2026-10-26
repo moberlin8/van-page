@@ -941,7 +941,6 @@ function dishSection(d) {
       <span class="v"><span class="led ${d.state === "CONNECTED" ? "ok" : "bad"}"
         title="dish link state -- ${esc(d.state || "unknown")}"></span></span></div>
     <div class="r"><span class="k">Signal To Noise Ratio</span>
-      <span class="v">${ok === true ? "ok" : ok === false ? "bad" : ""}</span>
       <span class="led ${ok === true ? "ok" : ok === false ? "bad" : ""}"
         title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
     <div class="r"><span class="k">Alerts</span>
