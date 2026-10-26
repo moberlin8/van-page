@@ -4,6 +4,7 @@
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
      Ada 26-Oct-2026 Failover box: renamed the "Repeat" row label to "Repeater".
      Ada 26-Oct-2026 Failover box: relabeled third row "TETHER" -> "CELLULAR" (wwan data).
+     Ada 26-Oct-2026 Failover box: "WAN" -> "WAN Port" (ETH1); restored third row to TETHER (wwan is the REPEATER/WirelessWAN, not CELL).
      Ada 26-Oct-2026 L700 clean(): regex /"//g -> /"/g. The doubled slash made
      clean() evaluate to a division by an undefined `g`, throwing ReferenceError
      at call time and blanking the Delilah router panel (dish was unaffected).
@@ -1245,9 +1246,9 @@ function routerSection(r) {
         ${esc(r.kmwan_sensitivity || "?")} ms. <b>WAN Uptime</b> is how long the
         WAN link has been up.</p>`,
       [
-        row("wan", updown(!!r.kmwan_wan_up, r.kmwan_active === "wan"), "col"),
+        row("WAN Port", updown(!!r.kmwan_wan_up, r.kmwan_active === "wan"), "col"),
         row("Repeater", updown(r.kmwan_active === "wwan", r.kmwan_active === "wwan"), "col"),
-        row("cellular", updown(r.kmwan_active === "wwan", r.kmwan_active === "wwan"), "col"),
+        row("tether", updown(!!r.kmwan_tethering_up, r.kmwan_active === "tethering"), "col"),
         row("mode", state2(r.kmwan_mode, r.kmwan_level), "col"),
         // Ada 24-Oct-2026 WAN Uptime moved here from the connection box (Matt).
         row("WAN Uptime", fmtUptime(w.wwan_uptime)),
