@@ -703,6 +703,26 @@ function num(v) { if (v == null || v === "") return null; const n = typeof v ===
 function pct(v, d) { const n = num(v); return n == null ? "&mdash;" : (n*100).toFixed(d == null ? 1 : d) + "%"; };
 function clean(s) { return String(s == null ? "" : s).replace(/"/g, ""); }
 
+
+// Starlink DishInfo.alerts is a uint32 bitmask (one bit per alert type).
+// Bit->name table from starlink_grpc alert_detail (sparky8512/starlink-grpc-tools).
+const ALERT_BIT_NAMES = [
+  "alert_motors_stuck","alert_thermal_shutdown","alert_thermal_throttle",
+  "alert_unexpected_location","alert_mast_not_near_vertical","alert_slow_ethernet_speeds",
+  "alert_roaming","alert_install_pending","alert_is_heating","alert_power_supply_thermal_throttle",
+  "alert_is_power_save_idle","alert_moving_while_not_mobile","alert_moving_fast_while_not_aviation",
+  "alert_dbf_telem_stale","alert_moving_too_fast_for_policy","alert_low_motor_current","alert_lower_signal_than_predicted",
+  "alert_slow_ethernet_speeds_100","alert_obstruction_map_reset",
+  "alert_dish_water_detected","alert_router_water_detected",
+  "alert_upsu_router_port_slow","alert_no_ethernet_link",
+];
+function decodeAlerts(mask){
+  if(!mask) return [];
+  const out=[];
+  for(let b=0;b<ALERT_BIT_NAMES.length;b++){ if(mask & (1<<b)) out.push(ALERT_BIT_NAMES[b]); }
+  for(let b=ALERT_BIT_NAMES.length;b<31;b++){ if(mask & (1<<b)) out.push("bit "+b+" (0x"+(1<<b).toString(16)+"") }
+  return out;
+}
 // Human units: bitrate gauges declare their unit explicitly -- deriving it
 // from magnitude is wrong here, because 1300 Mb/s is a normal axis end yet
 // 1300 < 1e6, so an auto-scaled axis would call it "1.30 Kb/s".
@@ -923,8 +943,9 @@ function dishSection(d) {
     <div class="r"><span class="k">Signal To Noise Ratio</span>
       <span class="v"><span class="led ${ok === true ? "ok" : ok === false ? "bad" : ""}"
         title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></span></div>
-    <div class="r"><span class="k">Alerts</span>
-      <span class="v big ${d.alerts ? "warn" : "ok"}">${fmtInt(d.alerts)}</span></div>
+        <div class="r"><span class="k">Alerts</span>
+      <span class="v big ${d.alerts ? "warn" : "ok"}">${fmtInt(d.alerts)}</span>
+      ${d.alerts ? `<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>` : ""}</div>>
     <!-- Ada 24-Oct-2026 the packet-loss percentage lives here, right below
          Alerts (Matt). -->
     <div class="r"><span class="k">Packet Loss</span>
@@ -940,9 +961,10 @@ function dishSection(d) {
         clears its noise floor. The dish reports no numeric SNR, so this is a
         flag, not a level: green when it clears, red when it does not, dim when
         it was not reported.</p>
-      <p><b>Alerts</b> &mdash; how many alerts the dish has active right now.
-        It is a bit field, one bit per alert type, so this is a count of
-        current alerts, not a total over a time window.</p>
+      <p><b>Alerts</b> &mdash; active Starlink alert conditions on the dish.
+        It is a bitmask, one bit per alert type; the number shown is the raw
+        bitmask value (e.g. 262144 = a single bit set), not a count of events.
+        Hover the &#9888; for the alert name(s).</p>
       <p><b>Packet loss</b> &mdash; the drop rate from the dish&rsquo;s most
         recent sample. The 15-minute average (dropped samples over all samples
         in that window) is a different number.</p>
