@@ -1,5 +1,9 @@
 <!doctype html>
 <!-- ## Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
+     Ada 26-Oct-2026 L700 clean(): regex /"//g -> /"/g. The doubled slash made
+     clean() evaluate to a division by an undefined `g`, throwing ReferenceError
+     at call time and blanking the Delilah router panel (dish was unaffected).
+     Applied from Hal's botland writeup (van-page-dollar-hash-fix).
      Ada 24-Oct-2026 Matt renamed the dish: the two places that named it
      ("starlink mini", in the masthead subtitle and the section heading) now say
      "Starlink EvilDish".
@@ -697,7 +701,7 @@ function fmtBytes(b) { if (b == null || isNaN(b)) return "&mdash;"; const u = ["
 // toFixed -- otherwise "1201.0".toFixed is a TypeError.
 function num(v) { if (v == null || v === "") return null; const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, "")); return isNaN(n) ? null : n; };
 function pct(v, d) { const n = num(v); return n == null ? "&mdash;" : (n*100).toFixed(d == null ? 1 : d) + "%"; };
-function clean(s) { return String(s == null ? "" : s).replace(/"//g, ""); }
+function clean(s) { return String(s == null ? "" : s).replace(/"/g, ""); }
 
 // Human units: bitrate gauges declare their unit explicitly -- deriving it
 // from magnitude is wrong here, because 1300 Mb/s is a normal axis end yet
