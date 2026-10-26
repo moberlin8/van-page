@@ -353,7 +353,7 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
    own .4rem margin pulls it .4rem in from the value column's right edge, so
    without this the bigger number would hang .4rem further right than them. */
 .csquare .r .v.big{font-size:1.35625rem;margin-right:.4rem}
-.csquare .r .v .led{margin-left:.4rem}
+.csquare .r .v .led{margin-right:.4rem}
 /* Ada 23-Oct-2026 the software row is STACKED, matching Matt's sketch: the
    label on its own line and the firmware string indented beneath it. The string
    is too long to sit beside its label at any width, so it gets the row to
@@ -941,7 +941,8 @@ function dishSection(d) {
       <span class="v"><span class="led ${d.state === "CONNECTED" ? "ok" : "bad"}"
         title="dish link state -- ${esc(d.state || "unknown")}"></span></span></div>
     <div class="r"><span class="k">Signal To Noise Ratio</span>
-      ${(ok === true || ok === false) ? `<span class="led ${ok ? "ok" : "bad"}" title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span>` : ""}</div>
+      <span class="led ${ok === true ? "ok" : ok === false ? "bad" : ""}"
+        title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
     <div class="r"><span class="k">Alerts</span>
       ${d.alerts ? `<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>` : ""}</div>
     <!-- Ada 24-Oct-2026 the packet-loss percentage lives here, right below
@@ -1024,6 +1025,11 @@ function dishSection(d) {
         &mdash; over two days the download counter gained 3301 MB and lost
         3297 MB. So this is the sum of the counter&rsquo;s increases, which is
         real bytes moved, rather than a counter reading.</p>
+      <p><b>Projection</b> &mdash; against your Roam 100 plan: 100 GB per cycle
+        (21st to the 20th, UTC), 50 GB hard throttle cap. <b>% used</b> is over
+        100 GB; <b>% to cap</b> is over 50 GB; <b>remaining GB</b> = 100 GB minus
+        used. Colour: green under 30 GB, yellow 30&ndash;50 GB (approaching the
+        throttle zone), red at 50 GB and above (throttle limit exceeded).</p>
     </span></span>
     <div class="r"><span class="k">Downloaded</span>
       <span class="v" id="usg-down">&mdash;</span></div>
@@ -1837,18 +1843,6 @@ function updateMap() {
   if (img) img.src = OBSTRUCTION_URL + "?t=" + Date.now();
 }
 
-// Ada 24-Oct-2026 usage over the billing period (Matt). The dish's usage
-// counters are rolling, so the total is the sum of the counter's increases --
-// serve-data.py does that work and returns the period boundaries too.
-const USAGE_DAY = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
-                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-const usageDay = (ts) => {
-  const d = new Date(ts * 1000);
-  return USAGE_DAY[d.getUTCMonth()] + " " + d.getUTCDate();
-};
-const usageGB = (bytes) => bytes == null ? "&mdash;"
-  : (bytes / 1e9).toFixed(2) + " GB";
-
 const USAGE_PLAN_GB = 100, USAGE_CAP_GB = 50;
 // Matt: projection rows (% of 100 GB plan, % to 50 GB cap, remaining GB, band).
 // The band colour is a CHILD <span> (not the element's className) so it survives
@@ -1875,6 +1869,17 @@ function renderUsageProjection(totalBytes) {
   setv("usg-remaining", remGB.toFixed(1) + " GB");
   setv("usg-status", label);
 }
+// Ada 24-Oct-2026 usage over the billing period (Matt). The dish's usage
+// counters are rolling, so the total is the sum of the counter's increases --
+// serve-data.py does that work and returns the period boundaries too.
+const USAGE_DAY = ["Jan", "Feb", "Mar", "Apr", "May", "Jun",
+                   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+const usageDay = (ts) => {
+  const d = new Date(ts * 1000);
+  return USAGE_DAY[d.getUTCMonth()] + " " + d.getUTCDate();
+};
+const usageGB = (bytes) => bytes == null ? "&mdash;"
+  : (bytes / 1e9).toFixed(2) + " GB";
 
 async function loadUsage() {
   try {
@@ -1891,7 +1896,7 @@ async function loadUsage() {
       : u.days_left + (u.days_left === 1 ? " day" : " days");
     // The database only started collecting on 22-Oct-2026, so say what part of
     // the period the total actually covers rather than claiming a full month.
-    $("#usg-since").textContent = usageDay(u.covered_from);
+    $("usg-since").textContent = usageDay(u.covered_from);
     renderUsageProjection(u.total);
   } catch (e) {
     for (const id of ["usg-down", "usg-up", "usg-total", "usg-period",
