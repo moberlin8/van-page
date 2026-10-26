@@ -1,0 +1,65 @@
+#!/usr/bin/env python3
+"""## Ada 22-Oct-2026 serve /srv/van/data as plain static JSON.
+
+Next.js (the homepage container) will not serve arbitrary files from
+/app/public/van/ -- it 404s /van/data/snapshot.json, /van/status.json and any
+other .json it does not know about, while happily serving .ttf and .html. The
+page therefore reads its data from a separate origin instead of fighting the
+framework. This is a 20-line static server on 127.0.0.1:8891; tailscaled
+terminates TLS for it on the tailnet (port 8891 -> 127.0.0.1:8891).
+
+Only ever binds loopback: the data is read-only and the tailnet is the only
+door in.
+"""
+import http.server
+import os
+import posixpath
+import socketserver
+import urllib.parse
+
+ROOT = "/srv/van/data"
+HOST = "127.0.0.1"
+PORT = 8891
+
+
+class Handler(http.server.SimpleHTTPRequestHandler):
+    def __init__(self, *a, **kw):
+        super().__init__(*a, directory=ROOT, **kw)
+
+    def translate_path(self, path):
+        # no traversal: strip query, normalise, and keep it inside ROOT
+        path = urllib.parse.urlparse(path).path
+        path = posixpath.normpath(path)
+        words = [w for w in path.split("/") if w and w not in (".", "..")]
+        full = os.path.join(ROOT, *words)
+        return full
+
+    def end_headers(self):
+        # the page lives on :8888 and fetches here on :8891 -- different ports
+        # are different origins, so the browser blocks the response without an
+        # explicit CORS header. The tailnet is the only door in, and the data
+        # is read-only, so a permissive allow-origin is correct here.
+        self.send_header("Access-Control-Allow-Origin", "*")
+        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Headers", "Content-Type")
+        # the page polls every 15s; never let a cache answer that
+        self.send_header("Cache-Control", "no-store, max-age=0")
+        super().end_headers()
+
+    def do_OPTIONS(self):
+        self.send_response(204)
+        self.end_headers()
+
+    def log_message(self, fmt, *args):
+        pass  # keep the journal quiet; the poller logs are the signal
+
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+
+if __name__ == "__main__":
+    with Server((HOST, PORT), Handler) as httpd:
+        print("serving %s on http://%s:%d" % (ROOT, HOST, PORT), flush=True)
+        httpd.serve_forever()

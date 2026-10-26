@@ -1,0 +1,279 @@
+#!/usr/bin/env python3
+"""## Ada 22-Oct-2026 poll the Starlink Mini (via the Delilah ssh tunnel) and the
+## Delilah router itself, storing everything in one sqlite file on harlan.
+
+Run by /home/ada/van/bin/poll-forever.sh every 60s. Each tick:
+  * writes one row to van_data (dish snapshot, latest-wins semantics)
+  * appends to history_* for anything that must persist across restarts
+  * refreshes data/snapshot.json, the single file the page reads
+
+Design notes:
+  * The dish is reached through the ssh tunnel harlan:19200 -> delilah ->
+    192.168.100.1:9200. If the tunnel is down the poll FAILS SOFT: the last
+    good row is kept and snapshot.json gets "stale": true. The page renders the
+    last reading with a stale marker rather than a blank tile.
+  * Delilah is polled over ssh each tick (~2s). Failure there is the same:
+    soft, and the last good Delilah reading survives in the file.
+  * Nothing is written anywhere but this directory.
+"""
+import json
+import os
+import subprocess
+import sys
+import time
+import urllib.request
+
+HERE = os.path.dirname(os.path.abspath(__file__))
+ROOT = os.path.dirname(HERE)
+# /srv/van/data is what the homepage container serves at /van/data/
+# (ROOT/data would be a second copy that nothing reads).
+DATA = "/srv/van/data"
+VAR = os.path.join(ROOT, "var")
+DB = os.path.join(DATA, "van.db")
+SNAPSHOT = os.path.join(DATA, "snapshot.json")
+
+GRPC_TOOLS = "/home/ada/starlink/starlink-grpc-tools"
+VENV = "/home/ada/starlink/.venv/bin/python3"
+DISH_TARGET = "127.0.0.1:19200"
+
+DELILAH_HOST = "root@delilah"
+DELILAH_SCRIPT = "/tmp/van-probe.sh"
+DELILAH_TIMEOUT = 45
+
+SCHEMA = """
+CREATE TABLE IF NOT EXISTS dish (
+    ts            REAL PRIMARY KEY,
+    state         TEXT,
+    sw_version    TEXT,
+    uptime_s      REAL,
+    ping_drop     REAL,
+    ping_latency  REAL,
+    downlink_bps  REAL,
+    uplink_bps    REAL,
+    snr           REAL,
+    frac_obstruct REAL,
+    obstructed    INTEGER,
+    azimuth       REAL,
+    elevation     REAL,
+    gps_sats      INTEGER,
+    alerts        INTEGER,
+    samples_15m   INTEGER,
+    ping_drop_15m REAL,
+    latency_mean  REAL,
+    latency_p90   REAL,
+    usage_down    INTEGER,
+    usage_up      INTEGER,
+    power_w       REAL
+);
+CREATE INDEX IF NOT EXISTS idx_dish_ts ON dish(ts);
+"""
+
+
+def log(msg):
+    sys.stdout.write("[poll] %s\n" % msg)
+    sys.stdout.flush()
+
+
+def http_json(url, timeout=20):
+    with urllib.request.urlopen(url, timeout=timeout) as r:
+        return json.loads(r.read().decode("utf-8"))
+
+
+def poll_dish():
+    """Return a dict of dish readings, or raise."""
+    import sqlite3  # noqa: F401  (kept local so a missing stdlib fails loudly)
+
+    code = r'''
+import sys, json
+sys.path.insert(0, %r)
+import starlink_grpc as s
+ctx = s.ChannelContext(%r)
+status = s.status_data(context=ctx)
+g, pdrop, pdrl, plat, llat, usage, power = s.history_stats(-1, context=ctx)
+out = {
+    "status": dict(status[0]),
+    "obstruction": dict(status[1]),
+    "alerts": dict(status[2]),
+    "update": dict(status[3]),
+    "general": g,
+    "ping_drop": pdrop,
+    "ping_latency": plat,
+    "usage": usage,
+    "power": power,
+}
+print(json.dumps(out))
+''' % (GRPC_TOOLS, DISH_TARGET)
+
+    r = subprocess.run([VENV, "-c", code], capture_output=True, text=True, timeout=120)
+    if r.returncode != 0:
+        raise RuntimeError("dish poll failed rc=%d: %s" % (r.returncode, r.stderr[-400:]))
+    return json.loads(r.stdout.strip().splitlines()[-1])
+
+
+def poll_delilah():
+    """Return a dict of Delilah readings, or raise."""
+    # pull the probe over first so the local copy is never stale
+    subprocess.run(
+        ["scp", "-O", "-q", "-o", "BatchMode=yes",
+         os.path.join(ROOT, "bin", "delilah-probe.sh"),
+         DELILAH_HOST + ":" + DELILAH_SCRIPT],
+        capture_output=True, text=True, timeout=40,
+    )
+    r = subprocess.run(
+        ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
+         DELILAH_HOST, "sh " + DELILAH_SCRIPT],
+        capture_output=True, text=True, timeout=DELILAH_TIMEOUT,
+    )
+    if r.returncode != 0:
+        raise RuntimeError("delilah poll failed rc=%d: %s" % (r.returncode, r.stderr[-300:]))
+    out = r.stdout.strip()
+    start = out.find("{")
+    if start < 0:
+        raise RuntimeError("delilah poll produced no JSON")
+    return json.loads(out[start:].splitlines()[0])
+
+
+def num(v):
+    """Coerce to float, or None. Handles the router's "999"/"0,5920" strings."""
+    if v is None:
+        return None
+    if isinstance(v, bool):
+        return 1.0 if v else 0.0
+    if isinstance(v, (int, float)):
+        return float(v)
+    t = str(v).strip().replace('"', "")
+    if not t:
+        return None
+    try:
+        return float(t)
+    except ValueError:
+        return None
+
+
+def load_snapshot():
+    try:
+        with open(SNAPSHOT) as f:
+            return json.load(f)
+    except Exception:
+        return {"dish": None, "delilah": None, "dish_ts": None, "delilah_ts": None}
+
+
+def save_snapshot(snap):
+    tmp = SNAPSHOT + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(snap, f, indent=1, sort_keys=True)
+    os.replace(tmp, SNAPSHOT)
+
+
+def main():
+    os.makedirs(DATA, exist_ok=True)
+    os.makedirs(VAR, exist_ok=True)
+
+    import sqlite3
+    con = sqlite3.connect(DB, timeout=15)
+    con.executescript(SCHEMA)
+
+    snap = load_snapshot()
+    now = time.time()
+
+    # ---- dish -----------------------------------------------------------------
+    try:
+        d = poll_dish()
+        st = d.get("status", {})
+        gen = d.get("general", {})
+        pd = d.get("ping_drop", {})
+        pl = d.get("ping_latency", {})
+        us = d.get("usage", {})
+        pw = d.get("power", {})
+
+        dec = pl.get("deciles_all_ping_latency[]") or []
+        p90 = dec[9] if len(dec) > 9 else None
+
+        row = (
+            now,
+            st.get("state"),
+            st.get("software_version"),
+            num(st.get("uptime")),
+            num(st.get("pop_ping_drop_rate")),
+            num(st.get("pop_ping_latency_ms")),
+            num(st.get("downlink_throughput_bps")),
+            num(st.get("uplink_throughput_bps")),
+            num(st.get("snr")),
+            num(st.get("fraction_obstructed")),
+            1 if st.get("currently_obstructed") else 0,
+            num(st.get("direction_azimuth")),
+            num(st.get("direction_elevation")),
+            num(st.get("gps_sats")),
+            num(st.get("alerts")),
+            gen.get("samples"),
+            num(pd.get("total_ping_drop")),
+            num(pl.get("mean_all_ping_latency")),
+            num(p90),
+            us.get("download_usage"),
+            us.get("upload_usage"),
+            num(pw.get("latest_power")),
+        )
+        con.execute(
+            "INSERT OR REPLACE INTO dish VALUES (%s)" % ",".join("?" * len(row)), row)
+        con.commit()
+        snap["dish"] = {
+            "ts": now,
+            "state": st.get("state"),
+            "sw_version": st.get("software_version"),
+            "uptime_s": num(st.get("uptime")),
+            "ping_drop": num(st.get("pop_ping_drop_rate")),
+            "ping_latency": num(st.get("pop_ping_latency_ms")),
+            "downlink_bps": num(st.get("downlink_throughput_bps")),
+            "uplink_bps": num(st.get("uplink_throughput_bps")),
+            "snr": num(st.get("snr")),
+            "frac_obstruct": num(st.get("fraction_obstructed")),
+            "obstructed": bool(st.get("currently_obstructed")),
+            "azimuth": num(st.get("direction_azimuth")),
+            "elevation": num(st.get("direction_elevation")),
+            "gps_sats": num(st.get("gps_sats")),
+            "alerts": num(st.get("alerts")),
+            "history_15m": {
+                "samples": gen.get("samples"),
+                "ping_drop": num(pd.get("total_ping_drop")),
+                "latency_mean": num(pl.get("mean_all_ping_latency")),
+                "latency_p90": num(p90),
+            },
+            "usage_15m": {
+                "down": us.get("download_usage"),
+                "up": us.get("upload_usage"),
+            },
+            "power_w": num(pw.get("latest_power")),
+        }
+        snap["dish_ts"] = now
+        log("dish ok  state=%s lat=%s drop=%s" % (
+            snap["dish"]["state"], snap["dish"]["ping_latency"], snap["dish"]["ping_drop"]))
+    except Exception as e:
+        snap["dish_stale"] = True
+        snap["dish_error"] = str(e)[:300]
+        log("dish FAILED: %s" % e)
+
+    # ---- delilah --------------------------------------------------------------
+    try:
+        r = poll_delilah()
+        snap["delilah"] = r
+        snap["delilah_ts"] = num(r.get("collected_at") and None) or now
+        snap["delilah_stale"] = False
+        log("delilah ok  wwan_up=%ss active=%s ssid=%s csq=%s" % (
+            r.get("wwan_uptime"), r.get("kmwan_active"), r.get("ssid"), r.get("csq")))
+    except Exception as e:
+        snap["delilah_stale"] = True
+        snap["delilah_error"] = str(e)[:300]
+        log("delilah FAILED: %s" % e)
+
+    # ---- staleness markers ----------------------------------------------------
+    snap["generated_at"] = now
+    snap["dish_stale"] = bool(snap.get("dish_ts") is None) or (
+        now - (snap.get("dish_ts") or 0) > 180)
+    if snap.get("dish_ts") is None:
+        snap["dish_stale"] = True
+    save_snapshot(snap)
+    con.close()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,0 +1,558 @@
+<!doctype html>
+<!-- ## Ada 22-Oct-2026 /van -- Starlink Mini + Delilah router status.
+     Static page: fetches the snapshot from the van-data JSON server on
+     port 8891 (Next.js 404s unknown .json under /van/, so the data has its
+     own origin). No build step, no framework, no JS dependencies.
+     Served at /van/ on port 8888 (harlan), linked from the harlan dashboard.
+
+     GAUGE DESIGN (Ada 22-Oct-2026):
+     Every gauge has a deliberately chosen axis range and three colour zones
+     drawn ON the track, so green/yellow/red describe a RANGE and not just the
+     current number. Ranges are reasoned per metric -- see the comment above
+     each gauge() call. Uptime is never a gauge: it is a time element
+     (days / hours / minutes), because a clock is not a level. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>van &mdash; starlink &amp; delilah</title>
+<style>
+/* ## Ada 22-Oct-2026 the harlan dashboard's own font bundle, reused verbatim.
+   /srv/media-stack/homepage/custom.css embeds Westminster as a base64 TTF
+   (Microsoft core font, 50 KB); this page ships the same file locally so it
+   never leaves its origin. Westminster is used ONLY for the masthead -- the
+   tiles and gauges use the same monospace stack as harlan's cards. */
+@font-face{
+  font-family:'Westminster';
+  font-style:normal;font-weight:400;font-display:swap;
+  src:url('assets/fonts/westminster.ttf') format('truetype');
+}
+
+:root{
+  /* slate, the same palette as the harlan dashboard (settings.yaml: theme dark,
+     color slate). Values are Tailwind's slate ramp so the two pages match. */
+  --bg:#020617;        /* slate-950 */
+  --panel:#0f172a;     /* slate-900 */
+  --panel2:#1e293b;    /* slate-800 */
+  --line:#334155;      /* slate-700 */
+  --ink:#f1f5f9;       /* slate-100 */
+  --dim:#cbd5e1;       /* slate-300 */
+  --faint:#94a3b8;     /* slate-400 */
+  --ok:#34d399;        /* emerald-400 */
+  --warn:#fbbf24;      /* amber-400 */
+  --bad:#fb7185;       /* rose-400 */
+  --info:#38bdf8;      /* sky-400 */
+  /* harlan's cards are Plex Mono; fall back to the same stack */
+  --font:'Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;
+  --display:'Westminster',var(--font);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);
+  font-size:14px;line-height:1.5;padding:2rem 1.5rem 4rem;
+  -webkit-font-smoothing:antialiased}
+a{color:var(--info);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ---- masthead: big centred Westminster title, smaller subhead, then body ---- */
+.masthead{text-align:center;margin:0 0 2.2rem}
+.masthead h1{
+  font-family:var(--display);font-weight:400;
+  font-size:clamp(2.4rem,7vw,4.2rem);line-height:1;margin:0 0 .5rem;
+  letter-spacing:.01em;color:var(--ink)}
+.masthead .sub{
+  font-family:var(--display);font-size:clamp(.95rem,2.4vw,1.25rem);
+  color:var(--dim);margin:0 0 .35rem;letter-spacing:.02em}
+.masthead .meta{
+  font-family:var(--font);font-size:.72rem;color:var(--faint);
+  letter-spacing:.04em}
+
+/* the layout is deliberately narrow: this is a status wall, not a dashboard */
+.wrap{max-width:1120px;margin:0 auto}
+
+/* ---- section headings: smaller than the masthead, bigger than body --------- */
+h2{
+  font-family:var(--display);font-weight:400;
+  font-size:1.25rem;letter-spacing:.03em;color:var(--dim);
+  margin:2.6rem 0 1rem;padding-bottom:.4rem;border-bottom:1px solid var(--line)}
+h3{font-size:.82rem;margin:1.6rem 0 .6rem;color:var(--faint);
+  text-transform:uppercase;letter-spacing:.1em;font-weight:400}
+
+/* ---- gauges ---------------------------------------------------------------- */
+/* A gauge is a track whose BACKGROUND is painted with the three colour zones,
+   plus a needle marking the live value. The zones are the point: the colour
+   states a range, so a reader sees both where the value is and whether that is
+   inside the acceptable band. */
+.gauges{display:grid;gap:1.1rem 1.4rem;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.gauge{background:var(--panel);border:1px solid var(--line);
+  border-radius:10px;padding:.95rem 1.05rem 1.05rem}
+.gauge .head{display:flex;justify-content:space-between;align-items:baseline;
+  margin-bottom:.55rem;gap:.6rem}
+.gauge .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.11em;
+  color:var(--faint)}
+.gauge .v{font-size:1.5rem;line-height:1;font-variant-numeric:tabular-nums;
+  white-space:nowrap}
+.gauge .v .u{font-size:.72rem;color:var(--faint);margin-left:.2rem}
+.gauge .note{font-size:.72rem;color:var(--faint);margin-top:.55rem;
+  font-variant-numeric:tabular-nums}
+
+.track{position:relative;height:16px;border-radius:8px;overflow:visible;
+  border:1px solid var(--line)}
+.zones{position:absolute;inset:0;border-radius:8px;opacity:.30}
+.needle{position:absolute;top:-5px;width:3px;height:24px;background:var(--ink);
+  border-radius:2px;transform:translateX(-1.5px);
+  transition:left .35s ease;box-shadow:0 0 0 1px rgba(2,6,23,.7)}
+.scale{display:flex;justify-content:space-between;font-size:.62rem;
+  color:var(--faint);margin-top:.35rem;font-variant-numeric:tabular-nums}
+
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .info{color:var(--info)}
+.muted{color:var(--faint)}
+
+/* ---- dials ----------------------------------------------------------------- */
+/* Circular dial for rates that are naturally bounded (percentages, drop rate).
+   Drawn as a conic-gradient ring, so no SVG and no JS geometry. */
+.dials{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+.dial{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:1rem .95rem;text-align:center}
+.dial .ring{
+  --p:0; --c:var(--ok);
+  width:104px;height:104px;margin:0 auto .6rem;border-radius:50%;
+  background:conic-gradient(var(--c) calc(var(--p)*1%),var(--panel2) 0);
+  display:grid;place-items:center;position:relative}
+.dial .ring::after{content:"";position:absolute;inset:9px;border-radius:50%;
+  background:var(--panel);border:1px solid var(--line)}
+.dial .ring span{position:relative;z-index:1;font-size:1.15rem;
+  font-variant-numeric:tabular-nums}
+.dial .k{font-size:.68rem;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--faint);display:block}
+.dial .note{font-size:.68rem;color:var(--faint);display:block;margin-top:.3rem}
+
+/* ---- text / time elements -------------------------------------------------- */
+/* Things that are not levels -- identity, software, and clocks. Uptime is a
+   TIME ELEMENT (days / hours / minutes), never a gauge: a clock is not a
+   quantity with an acceptable band. */
+.facts{display:grid;gap:.8rem;
+  grid-template-columns:repeat(auto-fit,minmax(190px,1fr))}
+.fact{background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  padding:.75rem .9rem}
+.fact .k{font-size:.66rem;text-transform:uppercase;letter-spacing:.1em;
+  color:var(--faint);display:block;margin-bottom:.25rem}
+.fact .v{font-size:1.05rem;font-variant-numeric:tabular-nums}
+.fact .v .u{font-size:.68rem;color:var(--faint);margin-left:.15rem}
+.fact .note{font-size:.68rem;color:var(--faint);display:block;margin-top:.3rem}
+
+/* ---- tables ---------------------------------------------------------------- */
+table{width:100%;border-collapse:collapse;font-size:.82rem;
+  background:var(--panel);border:1px solid var(--line);border-radius:10px;
+  overflow:hidden}
+th,td{text-align:left;padding:.42rem .7rem;border-bottom:1px solid var(--line)}
+th{color:var(--faint);font-weight:400;font-size:.66rem;text-transform:uppercase;
+  letter-spacing:.09em;background:var(--panel2)}
+td.v{font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}
+tr.off td{color:var(--faint)}
+
+.stale{display:inline-block;font-size:.68rem;padding:.12rem .45rem;border-radius:4px;
+  background:#3b2a12;color:var(--warn);border:1px solid #6b4a1c;
+  vertical-align:middle;font-family:var(--font)}
+
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);
+  color:var(--faint);font-size:.7rem;display:flex;justify-content:space-between;
+  gap:1rem;flex-wrap:wrap}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<div class="masthead">
+  <h1>van</h1>
+  <div class="sub">starlink mini &amp; delilah router</div>
+  <div class="meta">
+    <span id="when">waiting for data&hellip;</span>
+    <span id="stalemark"></span>
+  </div>
+</div>
+
+<div id="dish"></div>
+<div id="router"></div>
+
+<footer>
+  <span>polled every 60s &middot; data from <code>/srv/van/data</code></span>
+  <span>path: harlan &rarr; ssh :19200 &rarr; delilah &rarr; dish <code>192.168.100.1:9200</code></span>
+  <span><a href="https://harlan.cinnamon-pinecone.ts.net:8888/">&larr; harlan dashboard</a></span>
+</footer>
+
+</div>
+
+<script>
+// ---- helpers -----------------------------------------------------------------
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+
+const fmtInt = (n) => (n == null || isNaN(n)) ? "&mdash;"
+  : Math.round(n).toLocaleString("en-US");
+
+// UPTIME IS A TIME ELEMENT, NOT A GAUGE. Days / hours / minutes, because a
+// clock has no acceptable band -- longer is neither better nor worse.
+const fmtUptime = (s) => {
+  if (s == null || isNaN(s) || s < 0) return "&mdash;";
+  const d = Math.floor(s/86400), h = Math.floor((s%86400)/3600),
+        m = Math.floor((s%3600)/60);
+  if (d) return d+"d "+h+"h "+m+"m";
+  if (h) return h+"h "+m+"m";
+  return m+"m";
+};
+
+const fmtBytes = (b) => {
+  if (b == null || isNaN(b)) return "&mdash;";
+  const u = ["B","KB","MB","GB","TB"]; let i = 0, v = b;
+  while (v >= 1024 && i < u.length-1) { v /= 1024; i++; }
+  return v.toFixed(v >= 100 ? 0 : v >= 10 ? 1 : 2) + " " + u[i];
+};
+
+// The probe emits every field as a string, so coerce before any arithmetic or
+// toFixed -- otherwise "1201.0".toFixed is a TypeError.
+const num = (v) => {
+  if (v == null || v === "") return null;
+  const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, ""));
+  return isNaN(n) ? null : n;
+};
+const pct = (v, d) => { const n = num(v); return n == null ? "&mdash;"
+  : (n*100).toFixed(d == null ? 1 : d) + "%"; };
+const clean = (s) => String(s == null ? "" : s).replace(/"/g, "");
+
+// Human units: bitrate gauges declare their unit explicitly -- deriving it
+// from magnitude is wrong here, because 1300 Mb/s is a normal axis end yet
+// 1300 < 1e6, so an auto-scaled axis would call it "1.30 Kb/s".
+const MBPS = {f:1e6, u:"Mb/s"};
+
+// ---- zones ------------------------------------------------------------------
+// zones = [{to: <axis value>, cls: "ok"|"warn"|"bad"}, ...] ascending from lo.
+// The value's own colour is the zone it lands in.
+const ZONE_CLS = {ok:"var(--ok)", warn:"var(--warn)", bad:"var(--bad)"};
+const zoneFor = (v, zones) => {
+  if (v == null) return null;
+  for (const z of zones) if (v <= z.to) return z.cls;
+  return zones.length ? zones[zones.length-1].cls : "bad";
+};
+const zoneBg = (zones, lo, hi) => {
+  const span = hi - lo;
+  const stops = [];
+  let prev = 0;
+  for (const z of zones) {
+    const p = Math.max(0, Math.min(100, ((z.to - lo) / span) * 100));
+    if (p <= prev) continue;
+    stops.push(ZONE_CLS[z.cls] + " " + prev + "%", ZONE_CLS[z.cls] + " " + p + "%");
+    prev = p;
+  }
+  return "linear-gradient(90deg," + stops.join(",") + ")";
+};
+
+// ---- gauge ------------------------------------------------------------------
+// label, value, scale {f,u}, lo, hi, zones, note
+// The value is divided by scale.f so the number and its unit agree with the
+// axis labels, which are divided by the same factor.
+function gauge(label, value, scale, lo, hi, zones, note) {
+  const v = num(value);
+  const f = scale.f, u = scale.u;
+  // axis + value formatting: no trailing ".00" on a clean zero or a round ten
+  const fmt = (x) => {
+    const a = Math.abs(x);
+    if (a === 0) return "0";
+    if (a >= 100) return String(Math.round(x));
+    if (a >= 10) return String(Math.round(x));
+    if (a >= 1) return x.toFixed(1);
+    return x.toFixed(2);
+  };
+  const axis = `${fmt(lo/f)}${u?" "+esc(u):""}`;
+  const axisHi = `${fmt(hi/f)}${u?" "+esc(u):""}`;
+  if (v == null) {
+    return `<div class="gauge">
+      <div class="head"><span class="k">${esc(label)}</span>
+        <span class="v muted">&mdash;</span></div>
+      <div class="track"><div class="zones" style="background:${zoneBg(zones, lo, hi)}"></div></div>
+      <div class="scale"><span>${axis}</span><span>${axisHi}</span></div>
+      ${note ? `<div class="note">${note}</div>` : ""}</div>`;
+  }
+  const p = Math.max(0, Math.min(100, ((v - lo) / (hi - lo)) * 100));
+  const cls = zoneFor(v, zones);
+  return `<div class="gauge">
+    <div class="head"><span class="k">${esc(label)}</span>
+      <span class="v ${cls}">${fmt(v/f)}<span class="u">${esc(u)}</span></span>
+    </div>
+    <div class="track">
+      <div class="zones" style="background:${zoneBg(zones, lo, hi)}"></div>
+      <div class="needle" style="left:${p.toFixed(1)}%"></div>
+    </div>
+    <div class="scale"><span>${axis}</span><span>${axisHi}</span></div>
+    ${note ? `<div class="note">${note}</div>` : ""}</div>`;
+}
+
+// ---- dial -------------------------------------------------------------------
+// A bounded 0-100% metric drawn as a ring. Inverted metrics (drop rate) fill
+// less of the ring, so a good value reads as a small number.
+function dial(label, value, invert, note) {
+  const v = num(value);
+  if (v == null) {
+    return `<div class="dial">
+      <div class="ring" style="--p:0;--c:var(--faint)"><span class="muted">&mdash;</span></div>
+      <span class="k">${esc(label)}</span>
+      ${note ? `<span class="note">${esc(note)}</span>` : ""}</div>`;
+  }
+  const shown = Math.max(0, Math.min(1, v));
+  const p = shown * 100;
+  const cls = invert ? (v <= 0.01 ? "ok" : v <= 0.05 ? "warn" : "bad")
+                     : (v >= 0.8 ? "ok" : v >= 0.5 ? "warn" : "bad");
+  const colour = ZONE_CLS[cls];
+  return `<div class="dial">
+    <div class="ring" style="--p:${p.toFixed(1)};--c:${colour}">
+      <span class="${cls}">${pct(v, v < 0.1 ? 2 : 1)}</span></div>
+    <span class="k">${esc(label)}</span>
+    ${note ? `<span class="note">${esc(note)}</span>` : ""}</div>`;
+}
+
+// ---- dish -------------------------------------------------------------------
+function dishSection(d) {
+  const h = d.history_15m || {}, u = d.usage_15m || {};
+  const obPct = d.frac_obstruct == null ? null : d.frac_obstruct * 100;
+  return `
+  <h2>starlink mini</h2>
+
+  <div class="gauges">
+    <!-- Starlink Mini downlink: an idle link sits in the low kb/s, real use runs
+         20-100 Mb/s, bursts reach ~200. Axis 0-100 Mb/s: green from 20 (a
+         healthy stream), amber 5-20 (usable), red below 5 (idle or fault). -->
+    ${gauge("downlink", d.downlink_bps, MBPS, 0, 100e6,
+      [{to:5e6, cls:"bad"}, {to:20e6, cls:"warn"}, {to:100e6, cls:"ok"}],
+      "15 min total " + fmtBytes(u.down))}
+
+    <!-- Uplink on a Mini is far lower than downlink: typically 5-20 Mb/s, and
+         1 Mb/s still carries a call. Axis 0-20 Mb/s: green from 5, amber 1-5,
+         red below 1. -->
+    ${gauge("uplink", d.uplink_bps, MBPS, 0, 20e6,
+      [{to:1e6, cls:"bad"}, {to:5e6, cls:"warn"}, {to:20e6, cls:"ok"}],
+      "15 min total " + fmtBytes(u.up))}
+
+    <!-- Pop ping latency: Starlink is normally 20-50 ms, and anything under 40
+         is excellent for a satellite link. Axis 0-100 ms: green to 40, amber to
+         80, red beyond -- over 80 ms on Starlink is real degradation. -->
+    ${gauge("pop ping latency", d.ping_latency, {f:1, u:"ms"}, 0, 100,
+      [{to:40, cls:"ok"}, {to:80, cls:"warn"}, {to:100, cls:"bad"}],
+      "15 min mean " + (h.latency_mean == null ? "&mdash;" : h.latency_mean.toFixed(1) + " ms")
+        + " &middot; p90 " + (h.latency_p90 == null ? "&mdash;" : h.latency_p90.toFixed(1) + " ms"))}
+
+    <!-- SNR: the dish reports ~9-12 dB on a clear view; under 5 dB the link is
+         marginal and near 0 it cannot hold a link at all. Axis 0-15 dB. -->
+    ${gauge("snr", d.snr, {f:1, u:"dB"}, 0, 15,
+      [{to:5, cls:"bad"}, {to:9, cls:"warn"}, {to:15, cls:"ok"}],
+      d.is_snr_above_noise_floor ? "above noise floor" : "below noise floor")}
+
+    <!-- Obstruction: a clear view is 0-2%; 2-10% costs intermittent drops; over
+         10% is a genuine problem. Axis 0-20% so the red band stays visible when
+         the dish is badly blocked. -->
+    ${gauge("obstruction", obPct, {f:1, u:"%"}, 0, 20,
+      [{to:2, cls:"ok"}, {to:10, cls:"warn"}, {to:20, cls:"bad"}],
+      d.obstructed ? "obstructed now" : "clear sky")}
+
+    <!-- Elevation: the dish sits between ~20 and ~75 degrees depending on
+         latitude. There is no "good" elevation, only the current one, so the
+         bands here are cosmetic. Axis 0-90 degrees. -->
+    ${gauge("elevation", d.elevation, {f:1, u:"&deg;"}, 0, 90,
+      [{to:25, cls:"warn"}, {to:75, cls:"ok"}, {to:90, cls:"ok"}],
+      "azimuth " + (d.azimuth == null ? "&mdash;" : d.azimuth.toFixed(1) + "&deg;"))}
+
+    <!-- Power draw: a Mini idles near 20 W and loads to ~60 W; over 80 W is out
+         of spec. Axis 0-100 W. -->
+    ${gauge("power draw", d.power_w, {f:1, u:"W"}, 0, 100,
+      [{to:60, cls:"ok"}, {to:80, cls:"warn"}, {to:100, cls:"bad"}],
+      fmtInt(h.samples) + " samples / 15 min")}
+  </div>
+
+  <h3>loss &amp; reachability</h3>
+  <div class="dials">
+    <!-- Ping drop: 0-1% is normal for Starlink; 1-5% is degraded; over 5% means
+         the link is dropping real traffic. -->
+    ${dial("pop ping drop", d.ping_drop, true, "15 min " + pct(h.ping_drop))}
+    ${dial("obstruction", d.frac_obstruct, true, pct(d.frac_obstruct) + " of sky")}
+    <!-- 8+ satellites is a solid fix; under 4 the fix is unreliable. -->
+    ${dial("gps lock", d.gps_sats == null ? null : Math.min(1, d.gps_sats / 16), false,
+      fmtInt(d.gps_sats) + " satellites")}
+  </div>
+
+  <h3>terminal</h3>
+  <div class="facts">
+    <div class="fact"><span class="k">state</span>
+      <span class="v ${d.state === "CONNECTED" ? "ok" : "bad"}">${esc(d.state || "&mdash;")}</span>
+      <span class="note">link state</span></div>
+    <div class="fact"><span class="k">software</span>
+      <span class="v" style="font-size:.86rem">${esc(d.sw_version || "&mdash;")}</span>
+      <span class="note">dish firmware</span></div>
+    <!-- uptime: a TIME ELEMENT (days / hours / minutes), never a gauge -->
+    <div class="fact"><span class="k">uptime</span>
+      <span class="v">${fmtUptime(d.uptime_s)}</span>
+      <span class="note">since last dish boot</span></div>
+    <div class="fact"><span class="k">alerts</span>
+      <span class="v ${d.alerts ? "warn" : "ok"}">${fmtInt(d.alerts)}</span>
+      <span class="note">bit field</span></div>
+  </div>`;
+}
+
+// ---- delilah ----------------------------------------------------------------
+function routerSection(r) {
+  const w = r.wwan || r;   // probe emits flat keys; older snapshots may nest them
+  const memUsed = (w.mem_total && w.mem_avail) ? (1 - w.mem_avail/w.mem_total) : null;
+  const qeng = clean(w.qeng).split(",");
+
+  return `
+  <h2>delilah router</h2>
+
+  <h3>wan link</h3>
+  <div class="gauges">
+    <!-- WiFi client signal: -50 dBm is excellent, -67 is the usual "good enough"
+         floor for high rates, -80 is the edge of usability. Axis -100..-30. -->
+    ${gauge("signal", w.signal_dbm, {f:1, u:"dBm"}, -100, -30,
+      [{to:-80, cls:"bad"}, {to:-67, cls:"warn"}, {to:-30, cls:"ok"}],
+      "noise " + (w.noise_dbm == null ? "&mdash;" : w.noise_dbm + " dBm")
+        + " &middot; quality " + (w.link_quality || "?") + "/" + (w.link_quality_max || "?"))}
+
+    <!-- WiFi link rate on HE80: 1200 Mb/s is this association's ceiling; under
+         300 is poor. iwinfo already reports this in Mb/s, so no scaling.
+         Axis 0-1300 Mb/s. -->
+    ${gauge("bitrate", w.bitrate, {f:1, u:"Mb/s"}, 0, 1300,
+      [{to:300, cls:"bad"}, {to:800, cls:"warn"}, {to:1300, cls:"ok"}],
+      clean(w.ssid) + " ch " + (w.channel || "?") + " " + (w.freq_ghz || "") + " GHz")}
+  </div>
+
+  <h3>resources</h3>
+  <div class="gauges">
+    <!-- Memory: 70% used is where pressure starts; 85% is serious on a 512 MB box. -->
+    ${gauge("memory", memUsed == null ? null : memUsed * 100, {f:1, u:"%"}, 0, 100,
+      [{to:70, cls:"ok"}, {to:85, cls:"warn"}, {to:100, cls:"bad"}],
+      fmtBytes(w.mem_avail) + " free of " + fmtBytes(w.mem_total))}
+
+    <!-- Overlay filesystem: 80% is the warning line, 92% is where OpenWrt starts
+         refusing writes. Axis 0-100%. -->
+    ${gauge("overlay", w.overlay_pct, {f:1, u:"%"}, 0, 100,
+      [{to:80, cls:"ok"}, {to:92, cls:"warn"}, {to:100, cls:"bad"}],
+      "filesystem used")}
+
+    <!-- SoC thermal: the MT7981 is rated to 105 C but throttles well before
+         that; 70 C is warm, 85 C is hot. Axis 0-100 C. -->
+    ${gauge("thermal", w.temp_c, {f:1, u:"&deg;C"}, 0, 100,
+      [{to:70, cls:"ok"}, {to:85, cls:"warn"}, {to:100, cls:"bad"}],
+      "zone0 &middot; MT7981")}
+  </div>
+
+  <h3>failover chain</h3>
+  <table>
+    <tr><th>member</th><th>metric</th><th>link</th><th>role</th></tr>
+    <tr class="${r.kmwan_wan_up ? "" : "off"}">
+      <td>wan <span class="muted">(eth0)</span></td><td class="v">10</td>
+      <td>${r.kmwan_wan_up ? '<span class="ok">up</span>' : '<span class="muted">down</span>'}</td>
+      <td>${r.kmwan_active === "wan" ? '<span class="ok">active</span>' : "standby"}</td></tr>
+    <tr class="${r.kmwan_active === "wwan" ? "" : "off"}">
+      <td>wwan <span class="muted">(${esc(w.wwan_device || "apclix0")})</span></td><td class="v">20</td>
+      <td>${r.kmwan_active === "wwan" ? '<span class="ok">up</span>' : '<span class="muted">down</span>'}</td>
+      <td>${r.kmwan_active === "wwan" ? '<span class="ok">active</span>' : "standby"}</td></tr>
+    <tr class="${r.kmwan_tethering_up ? "" : "off"}">
+      <td>tethering</td><td class="v">30</td>
+      <td>${r.kmwan_tethering_up ? '<span class="ok">up</span>' : '<span class="muted">down</span>'}</td>
+      <td>${r.kmwan_active === "tethering" ? '<span class="ok">active</span>' : "standby"}</td></tr>
+  </table>
+  <div class="facts" style="margin-top:.8rem">
+    <div class="fact"><span class="k">mode</span>
+      <span class="v" style="font-size:.95rem">${esc(r.kmwan_mode || "&mdash;")}</span>
+      <span class="note">level ${esc(r.kmwan_level || "?")} &middot; sensitivity
+        ${esc(r.kmwan_sensitivity || "?")} ms</span></div>
+    <div class="fact"><span class="k">address</span>
+      <span class="v" style="font-size:.9rem">${esc(w.wwan_addr || "&mdash;")}</span>
+      <span class="note">gw ${esc(w.wwan_gateway || "&mdash;")}</span></div>
+    <div class="fact"><span class="k">wan uptime</span>
+      <span class="v">${fmtUptime(w.wwan_uptime)}</span>
+      <span class="note">rx ${fmtBytes(w.rx_bytes)} &middot; tx ${fmtBytes(w.tx_bytes)}</span></div>
+    <div class="fact"><span class="k">router uptime</span>
+      <span class="v">${fmtUptime(w.uptime)}</span>
+      <span class="note">load ${esc(w.load || "&mdash;")}</span></div>
+  </div>
+
+  <h3>cellular modem</h3>
+  <div class="gauges">
+    <!-- RSRP: -80 dBm is a strong LTE signal, -100 is the edge of coverage.
+         Axis -120..-70 dBm. -->
+    ${gauge("rsrp", qeng[13], {f:1, u:"dBm"}, -120, -70,
+      [{to:-100, cls:"bad"}, {to:-85, cls:"warn"}, {to:-70, cls:"ok"}],
+      "rsrq " + (qeng[14] || "&mdash;") + " dB &middot; sinr " + (qeng[15] || "&mdash;") + " dB")}
+
+    <!-- CSQ: 20-31 is a strong signal, 10-19 is usable, under 10 is marginal.
+         Axis 0-31. -->
+    ${gauge("csq", clean(w.csq).split(",")[0], {f:1, u:""}, 0, 31,
+      [{to:10, cls:"bad"}, {to:20, cls:"warn"}, {to:31, cls:"ok"}],
+      "registration " + esc(w.cereg || "&mdash;"))}
+  </div>
+  <div class="facts">
+    <div class="fact"><span class="k">modem</span>
+      <span class="v ${r.cell_ok ? "ok" : "warn"}">${r.cell_ok ? "on" : "no answer"}</span>
+      <span class="note">${esc(r.at_port || "no port")}</span></div>
+    <div class="fact"><span class="k">network</span>
+      <span class="v" style="font-size:.85rem">${esc(clean(w.qnwinfo || w.cops) || "&mdash;")}</span>
+      <span class="note">${esc(clean(w.cops))}</span></div>
+    <div class="fact"><span class="k">apn</span>
+      <span class="v" style="font-size:.9rem">${esc(w.apn || "&mdash;")}</span>
+      <span class="note">imsi ${esc(clean(w.imsi) || "&mdash;")}</span></div>
+    <div class="fact"><span class="k">radio</span>
+      <span class="v" style="font-size:.8rem">${esc(clean(w.qcsq) || "&mdash;")}</span>
+      <span class="note">qcsq: lte,rsrp,rsrq,sinr,rssi</span></div>
+    <div class="fact"><span class="k">firmware</span>
+      <span class="v" style="font-size:.72rem;line-height:1.4">${esc(clean(w.fw_version) || "&mdash;")}</span>
+      <span class="note">modem</span></div>
+    <div class="fact"><span class="k">clock</span>
+      <span class="v" style="font-size:.85rem">${esc(clean(w.cclk) || "&mdash;")}</span>
+      <span class="note">modem rtc</span></div>
+  </div>`;
+}
+
+// ---- render -----------------------------------------------------------------
+async function load() {
+  let snap = null;
+  try {
+    // port 8891 is the van-data JSON server; Next.js would 404 this path
+    const r = await fetch("https://harlan.cinnamon-pinecone.ts.net:8891/snapshot.json?t="
+      + Date.now(), {cache: "no-store"});
+    snap = await r.json();
+  } catch (e) {
+    $("when").textContent = "cannot read snapshot.json";
+    $("stalemark").innerHTML = '<span class="stale">no data</span>';
+    $("dish").innerHTML = '<h2>starlink mini</h2><p class="muted">'
+      + esc(String(e).slice(0, 200)) + "</p>";
+    return;
+  }
+
+  const now = Date.now() / 1000;
+  const parts = [];
+  if (snap.dish_ts) parts.push("dish " + Math.round(now - snap.dish_ts) + "s ago");
+  if (snap.delilah_ts) parts.push("router " + Math.round(now - snap.delilah_ts) + "s ago");
+  $("when").innerHTML = parts.join(" &middot; ") || "no data yet";
+
+  const stale = [];
+  if (snap.dish_stale || !snap.dish) stale.push("dish");
+  if (snap.delilah_stale || !snap.delilah) stale.push("router");
+  $("stalemark").innerHTML = stale.length
+    ? '<span class="stale">stale: ' + esc(stale.join(", ")) + '</span>' : "";
+
+  $("dish").innerHTML = snap.dish
+    ? dishSection(snap.dish)
+    : '<h2>starlink mini</h2><p class="muted">no dish data yet &mdash; '
+      + esc(snap.dish_error || "tunnel down") + "</p>";
+
+  $("router").innerHTML = snap.delilah
+    ? routerSection(snap.delilah)
+    : '<h2>delilah router</h2><p class="muted">no router data yet &mdash; '
+      + esc(snap.delilah_error || "unreachable") + "</p>";
+}
+
+load();
+setInterval(load, 15000);
+</script>
+</body>
+</html>
