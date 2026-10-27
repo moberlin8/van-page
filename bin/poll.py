@@ -15,6 +15,8 @@ Design notes:
   * Delilah is polled over ssh each tick (~2s). Failure there is the same:
     soft, and the last good Delilah reading survives in the file.
   * Nothing is written anywhere but this directory.
+  * Ada 27-Oct-2026 records notable state changes (SSID, failover, WAN, cell,
+    SIM, dish stale/recovery) as an events array in snapshot.json for the page.
 """
 import json
 import os
@@ -262,6 +264,12 @@ def main():
     snap = load_snapshot()
     now = time.time()
 
+    # ---- state-change notifier (Matt, 27-Oct-2026) -------------------------------
+    # snapshot.json is latest-wins, so we snapshot prev-state fields from the
+    # loaded snap *before* overwriting them in this tick.
+    prev_delilah = snap.get("delilah") or {}
+    prev_dish_stale = snap.get("dish_stale", False)
+
     # ---- dish -----------------------------------------------------------------
     try:
         d = poll_dish()
@@ -331,7 +339,7 @@ def main():
             "azimuth": num(st.get("direction_azimuth")),
             "elevation": num(st.get("direction_elevation")),
             "gps_sats": num(st.get("gps_sats")),
-            "alerts": num(st.get("alerts")),
+            "alerts": (None if st.get("alerts") is None else int(num(st.get("alerts")))),
             "history_15m": {
                 "samples": gen.get("samples"),
                 "ping_drop": num(pd.get("total_ping_drop")),
@@ -354,11 +362,15 @@ def main():
             "is_snr_above_noise_floor": st.get("is_snr_above_noise_floor"),
         }
         snap["dish_ts"] = now
+        snap["dish_stale"] = False
+        snap.pop("dish_error", None)
         log("dish ok  state=%s lat=%s drop=%s" % (
             snap["dish"]["state"], snap["dish"]["ping_latency"], snap["dish"]["ping_drop"]))
     except Exception as e:
         snap["dish_stale"] = True
         snap["dish_error"] = str(e)[:300]
+        # keep the previous dish/dish_ts so the page can still render last data;
+        # do not advance dish_ts on a failed poll
         log("dish FAILED: %s" % e)
 
     # ---- delilah --------------------------------------------------------------
@@ -367,6 +379,7 @@ def main():
         snap["delilah"] = r
         snap["delilah_ts"] = num(r.get("collected_at") and None) or now
         snap["delilah_stale"] = False
+        snap.pop("delilah_error", None)
         log("delilah ok  wwan_up=%ss active=%s ssid=%s csq=%s" % (
             r.get("wwan_uptime"), r.get("kmwan_active"), r.get("ssid"), r.get("csq")))
     except Exception as e:
@@ -382,10 +395,50 @@ def main():
 
     # ---- staleness markers ----------------------------------------------------
     snap["generated_at"] = now
-    snap["dish_stale"] = bool(snap.get("dish_ts") is None) or (
+    # staleness: treat an outstanding error as stale, and age out old data
+    snap["dish_stale"] = bool(snap.get("dish_error")) or bool(snap.get("dish_ts") is None) or (
         now - (snap.get("dish_ts") or 0) > 180)
     if snap.get("dish_ts") is None:
         snap["dish_stale"] = True
+    snap["delilah_stale"] = bool(snap.get("delilah_error")) or bool(snap.get("delilah_ts") is None) or (
+        now - (snap.get("delilah_ts") or 0) > 180)
+    if snap.get("delilah_ts") is None:
+        snap["delilah_stale"] = True
+
+    # ---- record state changes for the /van notifier (Matt, 27-Oct-2026) -----------
+    events = list(snap.get("events", []))
+
+    def _evt(msg):
+        events.append({"ts": now, "msg": msg})
+
+    nd = snap.get("delilah") or {}
+    # WiFi SSID
+    _o, _n = prev_delilah.get("ssid"), nd.get("ssid")
+    if _o and _n and _o != _n:
+        _evt("WiFi SSID changed from %s to %s" % (_o, _n))
+    # kmwan failover (wan <-> wwan <-> other)
+    _o, _n = prev_delilah.get("kmwan_active"), nd.get("kmwan_active")
+    if _o and _n and _o != _n:
+        _evt("Failover %s to %s" % (_o, _n))
+    # WiFi WAN port up/down
+    _o, _n = prev_delilah.get("kmwan_wan_up"), nd.get("kmwan_wan_up")
+    if _o is not None and _n is not None and _o != _n:
+        _evt("WAN Port %s" % ("up" if _n else "down"))
+    # cellular health
+    _o, _n = prev_delilah.get("cell_ok"), nd.get("cell_ok")
+    if _o is not None and _n is not None and _o != _n:
+        _evt("Cellular %s" % ("active" if _n else "inactive"))
+    # SIM swap (IMSI)
+    _o, _n = prev_delilah.get("imsi"), nd.get("imsi")
+    if _o and _n and _o != _n:
+        _evt("SIM changed (IMSI %s -> %s)" % (_o, _n))
+    # dish stale / recovered
+    if not prev_dish_stale and snap.get("dish_stale"):
+        _evt("Dish data became stale")
+    elif prev_dish_stale and not snap.get("dish_stale"):
+        _evt("Dish data recovered")
+
+    snap["events"] = events[-20:]  # cap at 20 most-recent
     save_snapshot(snap)
     con.close()
 
