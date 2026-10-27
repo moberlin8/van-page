@@ -5,7 +5,7 @@
      Ada 27-Oct-2026 State-change notifier: events array in snapshot.json (recorded by poll.py) is rendered below the stale mark on separate lines, oldest-to-newest, auto-expiring after 15 minutes (Matt).
      Ada 27-Oct-2026 Alerts ⚠️ now also shows when the dish state is not CONNECTED (e.g. rescanning sky after power cycle), with the dish state as tooltip.
      Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
-     Ada 27-Oct-2026 Alerts row shows green ✓ when all is well (no alerts, dish connected), yellow ⚠️ otherwise.
+     Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
      Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
@@ -976,7 +976,7 @@ function dishSection(d) {
         ? `<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>`
         : (d.state && d.state !== "CONNECTED")
           ? `<span class="led warn" title="${esc(d.state)} -- dish not yet connected (e.g. rescanning sky after power cycle)">&#9888;</span>`
-          : `<span class="led ok" title="no Starlink alerts, dish connected">&#10003;</span>`}</div>
+          : `<span class="led ok" title="no Starlink alerts, dish connected"></span>`}</div>
     <!-- Ada 24-Oct-2026 the packet-loss percentage lives here, right below
          Alerts (Matt). -->
     <div class="r"><span class="k">Packet Loss</span>
@@ -996,7 +996,7 @@ function dishSection(d) {
         or a non-CONNECTED dish state (e.g. rescanning sky after a power
         cycle). It is a bitmask, one bit per alert type; the number shown is
         the raw bitmask value (e.g. 262144 = a single bit set), not a count
-        of events. A green checkmark means no alerts and the dish is
+        of events. A green light means no alerts and the dish is
         connected. Hover the &#9888; for the alert name(s) or the dish state.</p>
       <p><b>Packet loss</b> &mdash; the drop rate from the dish&rsquo;s most
         recent sample. The 15-minute average (dropped samples over all samples
