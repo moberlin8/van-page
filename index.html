@@ -1,5 +1,7 @@
 <!doctype html>
-<!-- ## Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
+<!-- ## Ada 27-Oct-2026 Age at top of page: the seconds-since-last-data counter now renders as words ("59 seconds", "1 minute 28 seconds", "1 hour 57 minutes 5 seconds") instead of a bare "57s" (Matt).
+     Ada 27-Oct-2026 stale: field turns red (stale-red) when any source has been stale for more than 10 minutes (Matt).
+     Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
      Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
      Ada 26-Oct-2026 Failover box: renamed the "Repeat" row label to "Repeater".
@@ -484,6 +486,8 @@ tr.off td{color:var(--faint)}
 .stale{display:inline-block;font-size:0.8531rem;padding:.12rem .45rem;border-radius:4px;
   background:rgba(251,191,36,.14);color:var(--warn);border:0;
   vertical-align:middle;font-family:var(--font)}
+/* Ada 27-Oct-2026 stale > 10 min gets red to flag a real outage (Matt). */
+.stale-red{background:rgba(251,113,133,.14);color:var(--bad)}
 
 footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);
   color:var(--faint);font-size:0.8531rem;display:flex;justify-content:space-between;
@@ -1363,18 +1367,38 @@ async function load() {
   const now = Date.now() / 1000;
   // Ada 24-Oct-2026 the ages moved onto the masthead's two device lines (Matt):
   // "Starlink EvilDish 57s" / "Delilah Router 57s". The old #when line is gone.
-  const age = (ts) => ts ? Math.round(now - ts) + "s" : "&mdash;";
+  // Ada 27-Oct-2026 now renders as words (Matt): "59 seconds", "1 minute 28 seconds",
+  // "1 hour 57 minutes 5 seconds".
+  const age = (ts) => {
+    if (!ts) return "&mdash;";
+    const s = Math.round(now - ts);
+    const h = Math.floor(s / 3600);
+    const m = Math.floor((s % 3600) / 60);
+    const sec = s % 60;
+    const w = (n, word) => n === 1 ? word : word + "s";
+    if (h > 0) return h + " " + w(h, "hour") + " " + m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+    if (m > 0) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+    return sec + " " + w(sec, "second");
+  };
   const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
   if (agoDish) agoDish.textContent = age(snap.dish_ts);
   if (agoRouter) agoRouter.textContent = age(snap.delilah_ts);
 
   const stale = [];
-  if (snap.dish_stale || !snap.dish) stale.push("dish");
-  if (snap.delilah_stale || !snap.dish) stale.push("router");
+  let urgent = false;
+  if (snap.dish_stale || !snap.dish) {
+    stale.push("dish");
+    if (!snap.dish_ts || (now - snap.dish_ts) > 600) urgent = true;
+  }
+  if (snap.delilah_stale || !snap.dish) {
+    stale.push("router");
+    if (!snap.delilah_ts || (now - snap.delilah_ts) > 600) urgent = true;
+  }
   var sm = $("#stalemark");
   if (sm) {
     sm.innerHTML = stale.length
-      ? '<span class="stale">stale: ' + esc(stale.join(", ")) + '</span>' : "";
+      ? '<span class="stale' + (urgent ? ' stale-red' : '') + '">stale: '
+        + esc(stale.join(", ")) + '</span>' : "";
   }
   // device controls panel: separate from #dish (which re-renders every 15s), so
   // it survives the tick and picks up the fresh config on the next poll.
