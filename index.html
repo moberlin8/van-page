@@ -3,7 +3,8 @@
      Ada 27-Oct-2026 Age threshold: seconds-only below 200s (e.g. "198 seconds"), minutes kick in at 200s+ (e.g. "3 minutes 20 seconds") (Matt).
      Ada 27-Oct-2026 stale: field turns red (stale-red) when any source has been stale for more than 10 minutes (Matt).
      Ada 27-Oct-2026 State-change notifier: events array in snapshot.json (recorded by poll.py) is rendered below the stale mark on separate lines, oldest-to-newest, auto-expiring after 15 minutes (Matt).
-     Ada 27-Oct-2026 Alerts ⚠️ now also shows when the dish is not in CONNECTED state (e.g. rescanning sky after power cycle), with the dish state as tooltip.
+     Ada 27-Oct-2026 Alerts ⚠️ now also shows when the dish state is not CONNECTED (e.g. rescanning sky after power cycle), with the dish state as tooltip.
+     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
      Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
@@ -391,6 +392,7 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
   background:var(--faint);opacity:.55;flex:none;vertical-align:baseline}
 .csquare .led.ok{background:var(--ok);opacity:1;box-shadow:0 0 9px var(--ok)}
 .csquare .led.bad{background:var(--bad);opacity:1;box-shadow:0 0 9px var(--bad)}
+.csquare .led.warn{background:var(--warn);opacity:1;box-shadow:0 0 9px var(--warn)}
 .csquare .citem{display:flex;flex-direction:column;justify-content:center;
   min-width:0;padding:.3rem .45rem}
 .csquare .citem .k{font-size:0.9625rem;text-transform:uppercase;letter-spacing:.16em;
