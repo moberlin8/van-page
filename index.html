@@ -974,10 +974,10 @@ function dishSection(d) {
         title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
     <div class="r"><span class="k">Alerts</span>
       ${d.alerts
-        ? `&nbsp;<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>`
+        ? `&nbsp;&nbsp;<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>`
         : (d.state && d.state !== "CONNECTED")
-          ? `&nbsp;<span class="led warn" title="${esc(d.state)} -- dish not yet connected (e.g. rescanning sky after power cycle)">&#9888;</span>`
-          : `&nbsp;<span class="led ok" title="no Starlink alerts, dish connected"></span>`}</div>
+          ? `&nbsp;&nbsp;<span class="led warn" title="${esc(d.state)} -- dish not yet connected (e.g. rescanning sky after power cycle)">&#9888;</span>`
+          : `&nbsp;&nbsp;<span class="led ok" title="no Starlink alerts, dish connected"></span>`}</div>
     <!-- Ada 24-Oct-2026 the packet-loss percentage lives here, right below
          Alerts (Matt). -->
     <div class="r"><span class="k">Packet Loss</span>
