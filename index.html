@@ -1,5 +1,6 @@
 <!doctype html>
 <!-- ## Ada 27-Oct-2026 Age at top of page: the seconds-since-last-data counter now renders as words ("59 seconds", "1 minute 28 seconds", "1 hour 57 minutes 5 seconds") instead of a bare "57s" (Matt).
+     Ada 27-Oct-2026 Age threshold: seconds-only below 200s (e.g. "198 seconds"), minutes kick in at 200s+ (e.g. "3 minutes 20 seconds") (Matt).
      Ada 27-Oct-2026 stale: field turns red (stale-red) when any source has been stale for more than 10 minutes (Matt).
      Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
      Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
@@ -1367,8 +1368,11 @@ async function load() {
   const now = Date.now() / 1000;
   // Ada 24-Oct-2026 the ages moved onto the masthead's two device lines (Matt):
   // "Starlink EvilDish 57s" / "Delilah Router 57s". The old #when line is gone.
-  // Ada 27-Oct-2026 now renders as words (Matt): "59 seconds", "1 minute 28 seconds",
+  // Ada 27-Oct-2026 renders as words (Matt): "59 seconds", "1 minute 28 seconds",
   // "1 hour 57 minutes 5 seconds".
+  // Ada 27-Oct-2026 threshold for showing minutes is now 200 seconds (Matt):
+  // below 200s is "198 seconds", at 200s+ is "3 minutes 20 seconds". Seconds-only
+  // until the number would read as awkward in words, then convert.
   const age = (ts) => {
     if (!ts) return "&mdash;";
     const s = Math.round(now - ts);
@@ -1377,8 +1381,8 @@ async function load() {
     const sec = s % 60;
     const w = (n, word) => n === 1 ? word : word + "s";
     if (h > 0) return h + " " + w(h, "hour") + " " + m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
-    if (m > 0) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
-    return sec + " " + w(sec, "second");
+    if (s >= 200) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+    return s + " " + w(s, "second");
   };
   const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
   if (agoDish) agoDish.textContent = age(snap.dish_ts);
