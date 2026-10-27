@@ -2,7 +2,7 @@
 <!-- ## Ada 27-Oct-2026 Age at top of page: the seconds-since-last-data counter now renders as words ("59 seconds", "1 minute 28 seconds", "1 hour 57 minutes 5 seconds") instead of a bare "57s" (Matt).
      Ada 27-Oct-2026 Age threshold: seconds-only below 200s (e.g. "198 seconds"), minutes kick in at 200s+ (e.g. "3 minutes 20 seconds") (Matt).
      Ada 27-Oct-2026 stale: field turns red (stale-red) when any source has been stale for more than 10 minutes (Matt).
-     Ada 27-Oct-2026 State-change notifier: events array in snapshot.json (recorded by poll.py) is rendered below the stale mark as "N seconds ago: <message>" (Matt).
+     Ada 27-Oct-2026 State-change notifier: events array in snapshot.json (recorded by poll.py) is rendered below the stale mark as "N seconds ago: <message>", auto-expiring after 15 minutes (Matt).
      Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
      Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
@@ -1409,13 +1409,22 @@ async function load() {
         + esc(stale.join(", ")) + '</span>' : "";
   }
   // Ada 27-Oct-2026 render state-change events below the stale mark (Matt).
+  // Each event carries a timestamp (ts); show only the last 15 minutes, then
+  // auto-expire it so stale noise fades off the page.
   var ev = $("#events");
   if (ev) {
     if (snap.events && snap.events.length) {
-      ev.style.display = "";
-      ev.textContent = snap.events.slice(-5).reverse().map(function(e) {
-        return age(e.ts) + " ago: " + e.msg;
-      }).join(" \u00b7 ");
+      var recent = snap.events.filter(function(e) {
+        return e.ts && (now - e.ts) <= 900;
+      }).slice(-5).reverse();
+      if (recent.length) {
+        ev.style.display = "";
+        ev.textContent = recent.map(function(e) {
+          return age(e.ts) + " ago: " + e.msg;
+        }).join(" \u00b7 ");
+      } else {
+        ev.style.display = "none";
+      }
     } else {
       ev.style.display = "none";
     }
