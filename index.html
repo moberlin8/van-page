@@ -358,10 +358,10 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage{grid-template-rows:auto repeat(8,auto);gap:.18rem}
 .csquare .r{display:flex;align-items:baseline;justify-content:space-between;
   gap:.6rem;min-width:0;padding:.06rem .5rem}
-/* Ada 23-Oct-2026 the LABEL can shrink and wrap. With flex:none a long label
-   ("Signal To Noise Ratio") pushes the value out of a narrow square; letting it
-   wrap keeps the row intact and the square grows a little taller rather than
-   losing the reading. */
+/* Ada 23-Oct-2026 the LABEL can shrink and wrap. A long label
+   ("Signal To Noise Ratio", now abbreviated SNR) pushes the value out of a
+   narrow square; letting it wrap keeps the row intact and the square grows
+   a little taller rather than losing the reading. */
 .csquare .r .k{font-size:0.9625rem;text-transform:uppercase;letter-spacing:.09em;
   font-weight:500;color:var(--title);flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
 .csquare .r .v{font-size:1.085rem;font-weight:600;font-variant-numeric:tabular-nums;
@@ -969,9 +969,9 @@ function dishSection(d) {
     <div class="r"><span class="k">Connected</span>
       <span class="v"><span class="led ${d.state === "CONNECTED" ? "ok" : "bad"}"
         title="dish link state -- ${esc(d.state || "unknown")}"></span></span></div>
-    <div class="r"><span class="k">Signal To Noise Ratio</span>
+    <div class="r"><span class="k">SNR</span>
       <span class="led ${ok === true ? "ok" : ok === false ? "bad" : ""}"
-        title="is_snr_above_noise_floor${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
+        title="Signal To Noise Ratio (SNR)${ok == null ? " -- not reported by the dish" : ok ? " -- above the noise floor" : " -- below the noise floor"}"></span></div>
     <div class="r"><span class="k">Alerts</span>
       <span class="v">${d.alerts
         ? `<span class="led warn" title="${decodeAlerts(d.alerts).map(esc).join(', ')}">&#9888;</span>`
