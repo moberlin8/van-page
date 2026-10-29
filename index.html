@@ -21,8 +21,10 @@
      Ada 24-Oct-2026 Matt renamed the dish: the two places that named it
      ("starlink mini", in the masthead subtitle and the section heading) now say
      "Starlink EvilDish".
-     Ada 29-Oct-2026 Failover box: Cellular row now shows active/standby from kmwan_active === "wwan"
-     (only one failover link is active at a time), while up/down still reflects raw modem health (cell_ok).
+     Ada 29-Oct-2026 Failover box: Cellular row active/standby is always standby
+     (cellular modem is not a kmwan failover member on this build); up/down still
+     reflects raw modem health (cell_ok). Only one failover member can be active
+     at a time; wwan is the WiFi repeater, not the cellular modem.
 
      Static page: fetches the snapshot from the van-data JSON server on
      port 8891 (Next.js 404s unknown .json under /van/, so the data has its
@@ -1273,7 +1275,7 @@ function routerSection(r) {
       [
         row("WAN Port", updown(!!r.kmwan_wan_up, r.kmwan_active === "wan"), "col"),
         row("Repeater", updown(r.kmwan_active === "wwan", r.kmwan_active === "wwan"), "col"),
-        row("Cellular", updown(!!r.cell_ok, r.kmwan_active === "wwan"), "col"),
+        row("Cellular", updown(!!r.cell_ok, false), "col"),
         row("mode", state2(r.kmwan_mode, r.kmwan_level), "col"),
         // Ada 24-Oct-2026 WAN Uptime moved here from the connection box (Matt).
         row("WAN Uptime", fmtUptime(w.wwan_uptime)),
