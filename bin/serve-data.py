@@ -240,6 +240,13 @@ def read_usage():
             prev_u = u
 
     now = time.time()
+    # Ada 01-Nov-2026 add manual Oct 21-24 roaming totals (split by the same
+    # down/up ratio as the real Oct 22-24 data). The dish had no samples before
+    # Oct 22, so those four days are not represented in the DB.
+    manual_down = 15.8e9 * (3.541 / 5.494)
+    manual_up = 15.8e9 * (1.953 / 5.494)
+    down += manual_down
+    up += manual_up
     return {
         "billing_day": BILLING_DAY,
         "period_start": start,

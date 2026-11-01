@@ -1,6 +1,8 @@
 #!/bin/sh
 # Ada 22-Oct-2026 collect Delilah (GL-X3000) WAN / failover / cell stats for the
 # /van page. Runs ON DELILAH over ssh; writes JSON to stdout, nothing else.
+# Ada 01-Nov-2026 failover: poll all kmwan members (including secondwan and
+# modem_0001), ordered by metric; emit kmwan_members JSON array for the page.
 # Deliberately dependency-free: sh, uci, ubus, awk, iwinfo, /proc only.
 # Modem is DISABLED on this build (uci modem_0001.disabled=1), so cell fields
 # come out null rather than absent -- the page renders "modem disabled".
@@ -50,25 +52,6 @@ NOISE=$(echo "$WIFI" | sed -n 's/.*Noise: \(-*[0-9]*\) dBm.*/\1/p')
 QUALITY=$(echo "$WIFI" | sed -n 's/.*Link Quality: \([0-9]*\).*/\1/p')
 QUALITY_MAX=$(echo "$WIFI" | sed -n 's/.*Link Quality: [0-9]*\/\([0-9]*\).*/\1/p')
 
-# --- failover chain (kmwan, read from uci -- no ubus object exists) ----------
-KM_MODE=$(uci -q get kmwan.global.mode)
-KM_LEVEL=$(uci -q get kmwan.global.level)
-KM_SENS=$(uci -q get kmwan.global.sensitivity)
-# the member the routing table actually prefers: lowest metric among live ones
-KM_ACTIVE=""
-KM_ACTIVE_METRIC=999
-for m in wan wwan tethering; do
-  UP=$(ubus call network.interface.$m status 2>/dev/null | sed -n 's/.*"up": \(true\|false\).*/\1/p' | head -1)
-  MET=$(uci -q get kmwan.$m.metric)
-  DIS=$(uci -q get kmwan.$m.disabled)
-  [ -z "$MET" ] && MET=99
-  [ "$DIS" = "1" ] && continue
-  if [ "$UP" = "true" ] && [ "$MET" -lt "$KM_ACTIVE_METRIC" ]; then
-    KM_ACTIVE="$m"; KM_ACTIVE_METRIC="$MET"
-  fi
-done
-[ -z "$KM_ACTIVE" ] && KM_ACTIVE="none"
-
 # ---- cell modem: AT over the modem's own tty, bounded by a wall-clock deadline
 # The ubus objects this firmware names (mvas, modem) are NOT registered on this
 # build, and /usr/bin/modem_AT only answers AT+CIMI, so drive the port directly.
@@ -108,7 +91,6 @@ for p in /dev/ttyUSB2 /dev/ttyUSB1 /dev/ttyUSB0 /dev/ttyUSB3; do
   [ -c "$p" ] && ATPORT="$p" && break
 done
 
-CELL_OK=0
 CSQ=""; QCSQ=""; QNWINFO=""; QENG=""; QCAINFO=""; COPS=""
 CCLK=""; CIMI=""; FWVER=""; CEREG=""
 
@@ -147,6 +129,69 @@ if [ "$CELL_OK" = "1" ]; then
 fi
 # The modem replies keep their own embedded quotes; q() escapes them for JSON,
 # and the page strips them when it parses a field. Nothing stripped here.
+
+# --- failover chain (kmwan, read from uci -- no ubus object exists) ----------
+KM_MODE=$(uci -q get kmwan.global.mode)
+KM_LEVEL=$(uci -q get kmwan.global.level)
+KM_SENS=$(uci -q get kmwan.global.sensitivity)
+
+# Ada 01-Nov-2026 read all enabled kmwan members sorted by metric (lowest =
+# highest priority), including secondwan and modem_0001. The page shows the top
+# three from this ordered list.
+_TMP=/tmp/kmwan_list.$$
+uci show kmwan | grep '=member$' | cut -d= -f1 | while read -r section; do
+  interface=$(uci -q get "$section.interface")
+  metric=$(uci -q get "$section.metric")
+  disabled=$(uci -q get "$section.disabled")
+  [ -z "$interface" ] && continue
+  [ -z "$metric" ] && metric=99
+  [ "$disabled" = "1" ] && continue
+  printf '%d|%s\n' "$metric" "$interface"
+done | sort -t'|' -k1 -n > "$_TMP"
+
+# the member the routing table actually prefers: lowest metric among live ones
+KM_ACTIVE=""
+KM_ACTIVE_METRIC=999
+_TMP2=/tmp/kmwan_members.$$
+while IFS='|' read -r metric interface; do
+  UP=""
+  if [ "$interface" = "modem_0001" ]; then
+    # cellular modem has no ubus network interface; use AT gate instead
+    [ "$CELL_OK" = "1" ] && UP="true" || UP="false"
+  else
+    UP=$(ubus call network.interface.$interface status 2>/dev/null | sed -n 's/.*"up": \(true\|false\).*/\1/p' | head -1)
+    [ -z "$UP" ] && UP=false
+  fi
+  case "$interface" in
+    wan) label="WAN PORT" ;;
+    wwan) label="Repeater" ;;
+    modem_0001) label="Cellular" ;;
+    tethering) label="Tethering" ;;
+    secondwan) label="ETH2" ;;
+    *) label="$interface" ;;
+  esac
+  printf '%s|%s|%d|%s\n' "$label" "$interface" "$metric" "$UP"
+  if [ "$UP" = "true" ] && [ "$metric" -lt "$KM_ACTIVE_METRIC" ]; then
+    KM_ACTIVE="$interface"; KM_ACTIVE_METRIC="$metric"
+  fi
+done < "$_TMP" > "$_TMP2"
+
+KM_MEMBERS_JSON=$(awk -F'|' '{
+  printf "%s{\"name\":\"%s\",\"interface\":\"%s\",\"metric\":%d,\"up\":%s}", sep, $1, $2, $3, $4
+  sep=","
+}' < "$_TMP2")
+KM_MEMBERS_JSON="[$KM_MEMBERS_JSON]"
+
+rm -f "$_TMP" "$_TMP2"
+[ -z "$KM_ACTIVE" ] && KM_ACTIVE="none"
+
+# Ada 01-Nov-2026 uptime for the currently active kmwan member. The modem has
+# no ubus network interface, so cellular shows null.
+KM_ACTIVE_UPTIME=""
+if [ "$KM_ACTIVE" != "modem_0001" ] && [ "$KM_ACTIVE" != "none" ]; then
+  KM_ACTIVE_UPTIME=$(ubus call network.interface.$KM_ACTIVE status 2>/dev/null | sed -n 's/.*"uptime": \([0-9]*\).*/\1/p' | head -1)
+fi
+[ -z "$KM_ACTIVE_UPTIME" ] && KM_ACTIVE_UPTIME="null"
 
 # --- firmware identity --------------------------------------------------------
 # Ada 24-Oct-2026 the resources box now carries the router's firmware (Matt). GL.iNet
@@ -237,20 +282,24 @@ printf ','
 n link_quality "$QUALITY"
 printf ','
 n link_quality_max "$QUALITY_MAX"
-printf ','
+printf ',' 
 s kmwan_mode "$KM_MODE"
-printf ','
+printf ',' 
 s kmwan_level "$KM_LEVEL"
-printf ','
+printf ',' 
 n kmwan_sensitivity "$KM_SENS"
-printf ','
+printf ',' 
 s kmwan_active "$KM_ACTIVE"
-printf ','
+printf ',' 
 n kmwan_active_metric "$KM_ACTIVE_METRIC"
-printf ','
+printf ',' 
+n kmwan_active_uptime "$KM_ACTIVE_UPTIME"
+printf ',' 
 b kmwan_wan_up "$WAN_UP"
 printf ','
 b kmwan_tethering_up "$TETH_UP"
+printf ','
+printf '"kmwan_members":%s' "$KM_MEMBERS_JSON"
 printf ','
 s at_port "${ATPORT:-}"
 printf ','
