@@ -44,6 +44,9 @@ is shared: a dismissal made on one device is gone on the other.
 - Events have **no id** today — only `{ts, msg}`. `ts` is not unique: every trigger firing in
   one tick shares the same `now`.
 - The `#events` div already exists with `.masthead .events` CSS.
+- `van-data.service` runs with `ReadOnlyPaths=/srv/van/data`, deliberately: it can read the
+  poller's files but must not write them. Any new writable state it owns has to live elsewhere,
+  and a failed write must surface as an HTTP error rather than an empty reply.
 
 ## Approaches (Matt picked A in conversation)
 
@@ -67,8 +70,17 @@ keep events with `now - ts <= 26h`, then `[-500:]`. 26 h ≥ the 24 h the page s
 margin for clock skew between poller and browser. 500 stored keeps the file small while
 sitting far above the 80 the page will ever display. *My call: both numbers.*
 
-**3. Shared dismissal store (serve-data.py + `/srv/van/data/dismissed.json`).**
+**3. Shared dismissal store (serve-data.py + `/home/ada/van/var/dismissed.json`).**
 Shape `{"ids": {"<id>": <dismissed_ts>}}`. New routes on the existing `van-data` origin:
+
+**Not under `/srv/van/data`** (where the snapshot lives), despite this being the obvious
+neighbourhood: `van-data.service` runs with `ReadOnlyPaths=/srv/van/data` on purpose — its unit
+comment says "this only reads it", because the poller is the writer there. The first live POST
+against that path failed with `EROFS` and answered an *empty reply*. Relaxing the sandbox would
+let a bug in the read server rewrite `van.db`, so the store lives in `/home/ada/van/var/`
+instead: no unit change, and the poller's data stays read-only to this service. **A write
+failure must answer 500 JSON, never an empty reply** — an empty reply is what made this look
+like "dismiss does nothing" from the browser.
 
 - `GET /dismissed` → the id map. **Must be served `cache-control: no-store`** — snapshot.json's
   60 s cache would otherwise hand back pre-dismissal state and the alert would flash back on
