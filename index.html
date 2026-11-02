@@ -150,6 +150,10 @@ a:hover{text-decoration:underline}
 .masthead .evx:focus-visible,.masthead #evcloseall:focus-visible{
   outline:2px solid var(--info);outline-offset:2px}
 .masthead .evmore{color:var(--faint);font-style:italic}
+/* Ada 02-Nov-2026 the dismissal store can refuse a write (it answers 500 JSON);
+   the row comes back and this says why, rather than the alert vanishing and
+   reappearing later. */
+.masthead .everr{color:var(--warn)}
 
 /* the layout is deliberately narrow: this is a status wall, not a dashboard */
 .wrap{max-width:1120px;margin:0 auto}
@@ -1468,7 +1472,12 @@ async function loadDismissed() {
   } catch (e) { /* keep the last known dismissals; the next tick retries */ }
 }
 
-async function postDismiss(url, body) {
+// Ada 02-Nov-2026 a refused write must be visible, not swallowed: the design
+// requires the store's failure to be loud, and an un-awaited POST means the row
+// would otherwise sit hidden until a reload and then quietly reappear. Returning
+// false makes the caller un-hide the rows and say so.
+async function postDismiss(url, body, ids) {
+  let ok = false;
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -1476,8 +1485,14 @@ async function postDismiss(url, body) {
       body: JSON.stringify(body)
     });
     const j = await r.json();
-    if (j && j.ids) dismissedIds = j.ids;
-  } catch (e) { /* stays pending; loadDismissed() decides on the next tick */ }
+    if (r.ok && j && j.ids) { dismissedIds = j.ids; ok = true; }
+  } catch (e) { /* network failure -- handled the same way as a refusal */ }
+  if (!ok) {
+    (ids || []).forEach(function (id) { delete dismissedPending[id]; });
+    renderEvents(lastSnap, Date.now() / 1000);   // the rows come back, honestly
+    const bar = $("evbar");
+    if (bar) bar.innerHTML += ' <span class="everr">could not save that dismissal</span>';
+  }
 }
 
 function dismissOne(id) {
@@ -1485,7 +1500,7 @@ function dismissOne(id) {
   const t = Date.now() / 1000;
   dismissedPending[id] = t;
   renderEvents(lastSnap, t);
-  postDismiss(DISMISS_URL, { id: id });
+  postDismiss(DISMISS_URL, { id: id }, [id]);
 }
 
 function dismissAll() {
@@ -1498,7 +1513,7 @@ function dismissAll() {
   const t = Date.now() / 1000;
   ids.forEach(function (id) { dismissedPending[id] = t; });
   renderEvents(lastSnap, t);
-  postDismiss(DISMISS_ALL_URL, { ids: ids });
+  postDismiss(DISMISS_ALL_URL, { ids: ids }, ids);
 }
 
 // Delegated on document: #events is re-rendered on every tick, so per-row
