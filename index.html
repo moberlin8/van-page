@@ -142,7 +142,16 @@ a:hover{text-decoration:underline}
   color:var(--faint);margin:.25rem auto 0;max-width:min(100%,52rem);
   text-align:right}
 .masthead .evrow{display:flex;gap:.5rem;align-items:baseline;
-  justify-content:space-between}
+  justify-content:space-between;border-radius:2px}
+/* Ada 02-Nov-2026 hovering the dismiss button lights up its whole row (Matt), so
+   it is obvious which alert the x is about to close. :has() keys the row off the
+   BUTTON's hover rather than the row's -- hovering the message text alone does
+   nothing, and the row is the only thing that says which event is at stake.
+   Deliberately no padding: a vertical pad would grow the row past the 15.61px the
+   scroll box is measured against, and a horizontal one risks a horizontal
+   scrollbar. The band is exactly the row box. */
+.masthead .evrow:has(.evx:hover){background:var(--panel-hi)}
+.masthead .evrow:has(.evx:hover) .evtxt{color:var(--ink)}
 .masthead .evrow .evtxt{overflow-wrap:break-word}
 .masthead .evx,.masthead #evcloseall{background:none;border:0;color:var(--faint);
   font:inherit;letter-spacing:inherit;cursor:pointer;padding:0 .2rem;line-height:1}
