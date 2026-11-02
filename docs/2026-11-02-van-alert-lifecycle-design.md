@@ -171,7 +171,7 @@ deviation from the plan or a call the plan left open; each is in the commit mess
   unexplained. A refusal un-hides the rows and says so.
 
 **Deferred minors** (reviewer-flagged, deliberately not fixed): `esc()` does not escape quotes for
-the `data-id` attribute; `seq` resets每 tick so two ticks in one second would collide on id;
+the `data-id` attribute; `seq` resets each tick so two ticks in one second would collide on id;
 `normalise_events` raises on a non-dict entry; the JS suite does not cover `renderEvents` or the
 handlers; the PLAN doc still names the old store path; `Access-Control-Allow-Origin: *` plus
 unauthenticated write routes allows CSRF-style alert-hiding from any tailnet origin; `19.6rem` is
