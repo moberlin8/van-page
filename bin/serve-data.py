@@ -30,6 +30,8 @@ import os
 import posixpath
 import socketserver
 import sqlite3
+import tempfile
+import threading
 import time
 import urllib.parse
 
@@ -89,26 +91,50 @@ def prune_dismissed(ids, now=None):
 
 
 def write_dismissed(ids, path=None):
-    """Atomic write: temp file in the same dir, then os.replace."""
+    """Atomic write: a UNIQUE temp file in the same dir, then os.replace.
+
+    The temp name must be unique per writer. A fixed `path + ".tmp"` lets two
+    overlapping writers share one temp path, so one thread's os.replace finds the
+    file already moved and raises FileNotFoundError (observed under concurrency).
+    """
     path = DISMISSED if path is None else path
-    parent = os.path.dirname(path)
-    if parent:
-        os.makedirs(parent, exist_ok=True)
-    tmp = path + ".tmp"
-    with open(tmp, "w") as f:
-        json.dump({"ids": ids}, f)
-    os.replace(tmp, path)
+    parent = os.path.dirname(path) or "."
+    os.makedirs(parent, exist_ok=True)
+    fd, tmp = tempfile.mkstemp(dir=parent, prefix=".dismissed-", suffix=".tmp")
+    try:
+        with os.fdopen(fd, "w") as f:
+            json.dump({"ids": ids}, f)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
+
+
+# Ada 02-Nov-2026 the server is a ThreadingTCPServer and the page does NOT await
+# its POSTs, so dismissing one row and then hitting "close all" fires two
+# overlapping writes. Without this lock the read-modify-write loses updates --
+# a probe measured 277 of 320 dismissals lost, and a lost id comes back on the
+# next /dismissed fetch (a written anti-goal of the design).
+_dismiss_lock = threading.Lock()
 
 
 def dismiss_ids(id_list, path=None, now=None):
-    """Add ids to the map, prune, write, and return the new map."""
+    """Add ids to the map, prune, write, and return the new map.
+
+    The whole read-modify-write runs under one lock; the unique temp name in
+    write_dismissed covers the case where two writers still meet.
+    """
     now = time.time() if now is None else now
-    ids = read_dismissed(path)
-    for i in id_list:
-        if isinstance(i, str) and i:
-            ids[i] = now
-    ids = prune_dismissed(ids, now=now)
-    write_dismissed(ids, path)
+    with _dismiss_lock:
+        ids = read_dismissed(path)
+        for i in id_list:
+            if isinstance(i, str) and i:
+                ids[i] = now
+        ids = prune_dismissed(ids, now=now)
+        write_dismissed(ids, path)
     return ids
 
 # Whitelist of van.db columns the page may ask for. Keys are what the request

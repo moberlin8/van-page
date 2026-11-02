@@ -14,6 +14,7 @@ import json
 import os
 import sys
 import tempfile
+import threading
 import unittest
 
 # The file is serve-data.py (hyphen), so `import serve_data` cannot work: load it
@@ -64,6 +65,32 @@ class TestDismissStore(unittest.TestCase):
     def test_dismiss_ids_ignores_non_strings(self):
         out = sd.dismiss_ids(["ok", None, 7, ""], path=self.path, now=1000.0)
         self.assertEqual(sorted(out), ["ok"])
+
+    def test_concurrent_dismissals_all_survive(self):
+        # serve-data.py is a ThreadingTCPServer and the page does NOT await its
+        # POSTs, so dismissing one row and then hitting close-all fires two
+        # overlapping writes. A read-modify-write without a lock loses one of
+        # them: the lost id comes back on the next /dismissed fetch, which is a
+        # written anti-goal. A probe measured 277 of 320 dismissals lost.
+        ids = ["c-%03d" % i for i in range(120)]
+        errors = []
+
+        def worker(chunk):
+            try:
+                for i in chunk:
+                    sd.dismiss_ids([i], path=self.path, now=1000.0)
+            except Exception as e:  # noqa: BLE001 - the failure IS the assertion
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker, args=(ids[i::8],)) for i in range(8)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join()
+
+        self.assertEqual(errors, [], "no writer may fail")
+        self.assertEqual(sorted(sd.read_dismissed(self.path)), sorted(ids),
+                         "every concurrent dismissal must survive")
 
 
 if __name__ == "__main__":
