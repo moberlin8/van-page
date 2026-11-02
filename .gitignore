@@ -5,3 +5,4 @@ __pycache__/
 *.orig
 var/*.log
 data/*.db
+var/dismissed.json
