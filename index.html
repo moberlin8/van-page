@@ -8,7 +8,7 @@
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
      Ada 22-Oct-2026 /van -- Starlink EvilDish + Delilah router status.
-     Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 21st-20th billing day.
+     Ada 26-Oct-2026 Applied PR #2 (hal/add-usage-projection, moberlin8/van-page): restored usage-projection rows + renderUsageProjection + Projection tip; moved USAGE_DAY constants. Reverts PR #1 projection removal; PR #2 head lacks PR #1 .led.warn amber rule and keeps 25th-24th billing day.
      Ada 26-Oct-2026 Usage box: removed Period + Data Since rows; Status moved to bottom row, centered, no label (green=no text); new status labels; shrunk usage-box text/spacing so the box stays square.
      Ada 26-Oct-2026 Failover box: renamed the "Repeat" row label to "Repeater".
      Ada 26-Oct-2026 Failover box: relabeled third row "TETHER" -> "CELLULAR" (wwan data).
@@ -21,10 +21,11 @@
      Ada 24-Oct-2026 Matt renamed the dish: the two places that named it
      ("starlink mini", in the masthead subtitle and the section heading) now say
      "Starlink EvilDish".
-     Ada 29-Oct-2026 Failover box: Cellular row active/standby is always standby
-     (cellular modem is not a kmwan failover member on this build); up/down still
-     reflects raw modem health (cell_ok). Only one failover member can be active
-     at a time; wwan is the WiFi repeater, not the cellular modem.
+     Ada 01-Nov-2026 Failover box: shows top 3 kmwan members by metric from the
+     GL-iNet GUI order (currently WAN, Repeater, Cellular). Cellular active/
+     standby is always standby because modem_0001 has no ubus network interface;
+     its up/down reflects cell_ok. Only one failover member can be active at a
+     time; wwan is the WiFi repeater, not the cellular modem.
 
      Static page: fetches the snapshot from the van-data JSON server on
      port 8891 (Next.js 404s unknown .json under /van/, so the data has its
@@ -349,6 +350,8 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
    the left instead of the right. */
 .csquare .r .v a.fwdot.end .led{margin-left:.4rem;margin-right:0}
 .csquare.list.rows5{grid-template-rows:auto repeat(5,auto)}
+.csquare.list.rows3{grid-template-rows:auto repeat(3,auto)}
+.csquare.list.rows4{grid-template-rows:auto repeat(4,auto)}
 /* Ada 24-Oct-2026 the resources box gained Firmware and Update (Matt), taking it
    from five rows to seven. */
 .csquare.list.rows7{grid-template-rows:auto repeat(7,auto)}
@@ -1059,13 +1062,13 @@ function dishSection(d) {
           aria-label="About usage">i<span class="tip" role="tooltip">
       <p><b>Usage</b> &mdash; bytes moved over the current billing period.
         Starlink bills on a cycle anchored to the day the kit was activated, so
-        the period runs the 21st of one month to the 20th of the next, in UTC.</p>
+        the period runs from the 21st to the 24th, in UTC.</p>
       <p>The dish&rsquo;s own usage counters are <b>rolling</b>, not cumulative
         &mdash; over two days the download counter gained 3301 MB and lost
         3297 MB. So this is the sum of the counter&rsquo;s increases, which is
         real bytes moved, rather than a counter reading.</p>
       <p><b>Projection</b> &mdash; against your Roam 100 plan: 100 GB per cycle
-        (21st to the 20th, UTC), 50 GB hard throttle cap. <b>% used</b> is over
+        (21st to the 24th, UTC), 50 GB hard throttle cap. <b>% used</b> is over</p>
         100 GB; <b>% to cap</b> is over 50 GB; <b>remaining GB</b> = 100 GB minus
         used. Colour: green under 30 GB, yellow 30&ndash;50 GB (approaching the
         throttle zone), red at 50 GB and above (throttle limit exceeded).</p>
@@ -1265,21 +1268,19 @@ function routerSection(r) {
     <!-- Ada 24-Oct-2026 the failover box moved up to sit right after resources
          (Matt); it used to come after the cellular modem box. -->
     ${box("failover",
-      `<p>Delilah keeps three failover links and picks one: the WAN port (eth0/ETH1), the
-        wireless repeater (wwan/WirelessWAN${w.wwan_device ? " on " + esc(w.wwan_device) : ""}),
-        or a tethered phone. The cellular modem (two SIM slots, one or both possibly
-        disabled) is another WAN source, but is disabled on this build. The active
-        link carries the traffic and the others stand by. The metric is the failover
-        priority &mdash; lower wins. Sensitivity is ${esc(r.kmwan_sensitivity || "?")} ms.
-        <b>WAN Uptime</b> is how long the active WAN link has been up.</p>`,
+      `<p>Delilah keeps multiple failover links and picks one: the WAN port (eth0/ETH1),
+        the wireless repeater (wwan/WirelessWAN${w.wwan_device ? " on " + esc(w.wwan_device) : ""}),
+        a tethered phone, or a cellular modem. The active link carries the traffic and
+        the others stand by. The metric is the failover priority &mdash; lower wins.
+        Sensitivity is ${esc(r.kmwan_sensitivity || "?")} ms. The box shows the three
+        highest-priority links in GUI order.</p>`,
       [
-        row("WAN Port", updown(!!r.kmwan_wan_up, r.kmwan_active === "wan"), "col"),
-        row("Repeater", updown(r.kmwan_active === "wwan", r.kmwan_active === "wwan"), "col"),
-        row("Cellular", updown(!!r.cell_ok, false), "col"),
-        row("mode", state2(r.kmwan_mode, r.kmwan_level), "col"),
-        // Ada 24-Oct-2026 WAN Uptime moved here from the connection box (Matt).
-        row("WAN Uptime", fmtUptime(w.wwan_uptime)),
-      ])}
+        ...(r.kmwan_members || []).slice(0, 3).map((m) =>
+          row(m.name, updown(!!m.up, r.kmwan_active === m.interface), "col")
+        ),
+        row("WAN Uptime", fmtUptime(r.kmwan_active_uptime)),
+      ],
+      "rows4")}
 
     ${box("cellular modem",
       `<p><b>RSRP</b> is the LTE reference signal received power: -80 dBm is a
