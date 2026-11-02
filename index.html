@@ -163,6 +163,28 @@ a:hover{text-decoration:underline}
    the row comes back and this says why, rather than the alert vanishing and
    reappearing later. */
 .masthead .everr{color:var(--warn)}
+/* Ada 02-Nov-2026 "close all" asks first (Matt). It is the one destructive
+   control on the page and a mis-tap takes every alert with it.
+   The dialog is a SIBLING of .evbar and .events, never inside them:
+   renderEvents rewrites both on every tick, so a dialog living in either would
+   be wiped mid-decision. No ancestor of .masthead sets transform/filter/contain,
+   so position:fixed here really is the viewport (checked, 02-Nov-2026). */
+.masthead .evdlg{position:fixed;inset:0;z-index:50;display:none;
+  align-items:center;justify-content:center;background:rgba(2,6,23,.72)}
+.masthead .evdlg[data-open="1"]{display:flex}
+.masthead .evcard{background:var(--bg);border:1px solid var(--line);
+  border-radius:6px;padding:.85rem 1rem;max-width:min(92vw,22rem);
+  font-family:var(--font);font-size:.7rem;letter-spacing:.04em;
+  color:var(--dim)}
+.masthead .evcard .evq{margin:0 0 .2rem}
+.masthead .evcard .evnote{color:var(--faint);font-size:.62rem;margin:0 0 .75rem}
+.masthead .evacts{display:flex;gap:.85rem;justify-content:center}
+.masthead .evacts button{background:none;border:0;color:var(--faint);
+  font:inherit;letter-spacing:inherit;cursor:pointer;padding:0 .2rem;line-height:1}
+.masthead .evacts button:hover{color:var(--ink)}
+.masthead .evacts .evok{color:var(--bad)}
+.masthead .evacts button:focus-visible{outline:2px solid var(--info);
+  outline-offset:2px}
 
 /* the layout is deliberately narrow: this is a status wall, not a dashboard */
 .wrap{max-width:1120px;margin:0 auto}
@@ -734,6 +756,20 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
        box's 20-row budget stays 20 alerts (Matt). -->
   <div class="evbar" id="evbar"></div>
   <div class="events" id="events"></div>
+  <!-- Ada 02-Nov-2026 the close-all confirmation (Matt). Static markup, hidden
+       until asked for: renderEvents owns .evbar and .events, and this must
+       survive every tick it does. -->
+  <div class="evdlg" id="evdlg" role="dialog" aria-modal="true"
+       aria-labelledby="evdlgtxt">
+    <div class="evcard">
+      <p class="evq" id="evdlgtxt"></p>
+      <p class="evnote">this clears them on every device, including Hal's</p>
+      <div class="evacts">
+        <button type="button" id="evdlgcancel">cancel</button>
+        <button type="button" id="evdlgok" class="evok">yes, dismiss</button>
+      </div>
+    </div>
+  </div>
 </div>
 
 <!-- Ada 24-Oct-2026 ALL SIX boxes under this heading wrap together (Matt): #dish and
@@ -795,6 +831,13 @@ function visibleEvents(events, now, dismissed, pending) {
     return !has(dismissed, id) && !has(pending, id);
   });
   return { total: list.length, list: list.slice(-EVENT_DISPLAY_MAX) };
+}
+
+// Ada 02-Nov-2026 the confirmation text for "close all" (Matt). Pure and
+// DOM-free so the test can slice it; see the note above. A single alert must not
+// read as "1 alerts", so it is not pluralised blindly.
+function closeAllPrompt(n) {
+  return "dismiss " + n + (n === 1 ? " alert?" : " alerts?");
 }
 
 // UPTIME IS A TIME ELEMENT, NOT A GAUGE. Days / hours / minutes, because a
@@ -1512,12 +1555,13 @@ function dismissOne(id) {
   postDismiss(DISMISS_URL, { id: id }, [id]);
 }
 
-function dismissAll() {
-  const ids = [];
-  document.querySelectorAll("#events .evrow").forEach(function (n) {
-    const id = n.getAttribute("data-id");
-    if (id) ids.push(id);
-  });
+// The ids the open dialog promised to dismiss, frozen when it opened so the
+// number it shows is exactly what confirming takes: a tick landing while the
+// dialog is up must not quietly change the answer.
+var closeAllPending = null;
+
+function dismissAll(ids) {
+  ids = ids || [];
   if (!ids.length) return;
   const t = Date.now() / 1000;
   ids.forEach(function (id) { dismissedPending[id] = t; });
@@ -1525,14 +1569,63 @@ function dismissAll() {
   postDismiss(DISMISS_ALL_URL, { ids: ids }, ids);
 }
 
-// Delegated on document: #events is re-rendered on every tick, so per-row
-// listeners would be discarded (same reason the info-circle tips delegate).
+// Ada 02-Nov-2026 "close all" asks first (Matt).
+function openCloseAll() {
+  const dlg = $("evdlg"), txt = $("evdlgtxt");
+  if (!dlg || !txt) return;
+  const ids = [];
+  document.querySelectorAll("#events .evrow").forEach(function (n) {
+    const id = n.getAttribute("data-id");
+    if (id) ids.push(id);
+  });
+  if (!ids.length) return;
+  closeAllPending = ids;
+  txt.textContent = closeAllPrompt(ids.length);
+  dlg.setAttribute("data-open", "1");
+  const cancel = $("evdlgcancel");
+  if (cancel) cancel.focus();   // the safe answer is the one that holds focus
+}
+
+function closeCloseAll(restoreFocus) {
+  const dlg = $("evdlg");
+  if (!dlg) return;
+  dlg.removeAttribute("data-open");
+  closeAllPending = null;
+  if (restoreFocus) {
+    // Still there only because nothing was dismissed. On a confirm the control
+    // is gone (the list is empty, so renderEvents clears the bar), and focus
+    // falls back to the document rather than to a detached button.
+    const b = $("evcloseall");
+    if (b) b.focus();
+  }
+}
+
+function confirmCloseAll() {
+  const ids = closeAllPending || [];
+  closeCloseAll(false);
+  dismissAll(ids);
+}
+
+// Delegated on document: #events and #evbar are re-rendered on every tick, so
+// per-row listeners would be discarded (same reason the info-circle tips
+// delegate).
 document.addEventListener("click", function (e) {
   const t = e.target;
   if (!t || !t.closest) return;
   const x = t.closest(".evx");
   if (x) { dismissOne(x.getAttribute("data-id")); return; }
-  if (t.closest("#evcloseall")) dismissAll();
+  if (t.closest("#evcloseall")) { openCloseAll(); return; }
+  if (t.closest("#evdlgok")) { confirmCloseAll(); return; }
+  if (t.closest("#evdlgcancel")) { closeCloseAll(true); return; }
+  // the backdrop itself, not the card: a click on the card's padding does nothing
+  if (t.id === "evdlg") closeCloseAll(true);
+});
+
+// Escape cancels, the way every other dialog on the platform behaves.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  const dlg = $("evdlg");
+  if (dlg && dlg.getAttribute("data-open") === "1") closeCloseAll(true);
 });
 
 // Paints the close-all bar and the alert rows. Renders at most

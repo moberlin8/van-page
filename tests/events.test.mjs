@@ -17,8 +17,8 @@ const start = html.indexOf("\n// ---- helpers");
 const end = html.indexOf("\n// ---- zones");
 assert.ok(start > -1 && end > start, "helpers block markers missing");
 const src = html.slice(start, end);
-const { eventId, visibleEvents, EVENT_DISPLAY_MAX, EVENT_WINDOW_S } =
-  new Function(src + "\nreturn { eventId, visibleEvents, EVENT_DISPLAY_MAX, EVENT_WINDOW_S };")();
+const { eventId, visibleEvents, EVENT_DISPLAY_MAX, EVENT_WINDOW_S, closeAllPrompt } =
+  new Function(src + "\nreturn { eventId, visibleEvents, EVENT_DISPLAY_MAX, EVENT_WINDOW_S, closeAllPrompt };")();
 
 const NOW = 100000;
 const ev = (ts, msg, id) => ({ ts, msg, id });
@@ -62,4 +62,11 @@ test("returns events oldest-first", () => {
 test("an event with no ts is dropped, not rendered as an age of NaN", () => {
   const out = visibleEvents([{ msg: "no ts", id: "x" }], NOW, {}, {});
   assert.equal(out.total, 0);
+});
+
+// "close all" is the only destructive control on the page, and the count is the
+// whole point of the confirmation: it says how much the click will take with it.
+test("the close-all prompt counts, in the right number", () => {
+  assert.equal(closeAllPrompt(1), "dismiss 1 alert?");
+  assert.equal(closeAllPrompt(80), "dismiss 80 alerts?");
 });
