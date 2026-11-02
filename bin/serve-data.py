@@ -13,8 +13,15 @@ Ada 23-Oct-2026 added /history: the poller writes one row per tick into
 the snapshot comes from. Read-only, and the column list is a whitelist -- no
 user input ever reaches the query string.
 
-Only ever binds loopback: the data is read-only and the tailnet is the only
-door in.
+Only ever binds loopback: the data was read-only until Ada 02-Nov-2026, which
+added the shared alert-dismissal store (dismissed.json) as the one writable
+file; the tailnet is the only door in.
+
+Ada 02-Nov-2026 the alerts now live 24h and are dismissible (Matt), so this
+server owns dismissed.json: the map of closed alert ids, shared by every
+device. It is a separate file from snapshot.json on purpose -- the poller
+rewrites snapshot.json every tick, so a dismissal kept there would be
+overwritten and the closed alert would come back.
 """
 import http.server
 import json
@@ -29,6 +36,72 @@ ROOT = "/srv/van/data"
 DB = os.path.join(ROOT, "van.db")
 HOST = "127.0.0.1"
 PORT = 8891
+
+# Ada 02-Nov-2026 the shared alert-dismissal store (Matt). Deliberately a
+# SEPARATE file from snapshot.json: the poller rewrites snapshot.json every tick
+# from a copy it read at the start of that tick, so a dismissal landing mid-tick
+# would be overwritten and the closed alert would come back. The poller never
+# opens this file.
+DISMISSED = os.path.join(ROOT, "dismissed.json")
+DISMISS_WINDOW_S = 26 * 3600
+
+
+def read_dismissed(path=None):
+    """The shared dismissal map {id: dismissed_ts}.
+
+    A missing, unreadable or malformed file is an empty map, never an error:
+    the page has to render whether or not anyone has dismissed anything.
+    """
+    path = DISMISSED if path is None else path
+    try:
+        with open(path) as f:
+            data = json.load(f)
+    except Exception:
+        return {}
+    ids = data.get("ids") if isinstance(data, dict) else None
+    if not isinstance(ids, dict):
+        return {}
+    out = {}
+    for k, v in ids.items():
+        try:
+            out[str(k)] = float(v)
+        except (TypeError, ValueError):
+            continue
+    return out
+
+
+def prune_dismissed(ids, now=None):
+    """Drop ids dismissed longer ago than the retention window.
+
+    A timestamp in the future (browser/poller clock skew) is kept, not dropped:
+    a dismissal that appears to be from tomorrow is still a dismissal.
+    """
+    now = time.time() if now is None else now
+    return {k: v for k, v in ids.items() if now - v <= DISMISS_WINDOW_S}
+
+
+def write_dismissed(ids, path=None):
+    """Atomic write: temp file in the same dir, then os.replace."""
+    path = DISMISSED if path is None else path
+    parent = os.path.dirname(path)
+    if parent:
+        os.makedirs(parent, exist_ok=True)
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump({"ids": ids}, f)
+    os.replace(tmp, path)
+
+
+def dismiss_ids(id_list, path=None, now=None):
+    """Add ids to the map, prune, write, and return the new map."""
+    now = time.time() if now is None else now
+    ids = read_dismissed(path)
+    for i in id_list:
+        if isinstance(i, str) and i:
+            ids[i] = now
+    ids = prune_dismissed(ids, now=now)
+    write_dismissed(ids, path)
+    return ids
 
 # Whitelist of van.db columns the page may ask for. Keys are what the request
 # uses; values are the real column names. A requested field that is not in here
