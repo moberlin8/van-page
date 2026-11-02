@@ -1,3 +1,9 @@
 *.bak
 data/*.json
 data/*.db
+
+# Ada 02-Nov-2026 data/*.json already covers the poller's runtime files, but
+# .gitignore does NOT apply to a file git already tracks -- so data/fw-update.json
+# was tracked anyway and made this repo permanently dirty (the poller rewrites it
+# every firmware check). It is out of the index now; git rm --cached keeps the
+# file on disk, which is where the poller needs it.
