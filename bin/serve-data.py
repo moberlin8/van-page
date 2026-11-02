@@ -21,7 +21,8 @@ Ada 02-Nov-2026 the alerts now live 24h and are dismissible (Matt), so this
 server owns dismissed.json: the map of closed alert ids, shared by every
 device. It is a separate file from snapshot.json on purpose -- the poller
 rewrites snapshot.json every tick, so a dismissal kept there would be
-overwritten and the closed alert would come back.
+overwritten and the closed alert would come back. Routes: GET /dismissed
+(no-store), POST /dismiss {id}, POST /dismiss_all {ids:[...]}.
 """
 import http.server
 import json
@@ -339,6 +340,15 @@ def read_usage():
 
 
 class Handler(http.server.SimpleHTTPRequestHandler):
+    # Ada 02-Nov-2026 per-request opt-out of the 60s cache. snapshot.json wants
+    # the cache; the dismissal state must never be cached or the page hands back
+    # pre-dismissal state and a closed alert flashes back.
+    # This is a CLASS attribute, not set in __init__: BaseRequestHandler.__init__
+    # calls handle() itself, so the request has already been served by the time
+    # __init__ gets a line after super().__init__() -- an instance attribute set
+    # there is too late and end_headers() raises AttributeError.
+    no_store = False
+
     def __init__(self, *a, **kw):
         super().__init__(*a, directory=ROOT, **kw)
 
@@ -353,16 +363,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def end_headers(self):
         # the page lives on :8888 and fetches here on :8891 -- different ports
         # are different origins, so the browser blocks the response without an
-        # explicit CORS header. The tailnet is the only door in, and the data
-        # is read-only, so a permissive allow-origin is correct here.
+        # explicit CORS header. The tailnet is the only door in, so a permissive
+        # allow-origin is correct here. Ada 02-Nov-2026 POST is allowed now that
+        # the dismissal routes write; Content-Type was already permitted, which
+        # is what a JSON POST preflight needs.
         self.send_header("Access-Control-Allow-Origin", "*")
-        self.send_header("Access-Control-Allow-Methods", "GET, OPTIONS")
+        self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type")
         # the page polls every 15s; never let a cache answer that
         # Ada 23-Oct-2026 the map is a slow-changing snapshot, so let the
         # browser cache it: without this a 15s rebuild would refetch it and
         # the disc would visibly flicker. 60s matches the server-side TTL.
-        self.send_header("Cache-Control", "max-age=60")
+        self.send_header("Cache-Control",
+                         "no-store" if self.no_store else "max-age=60")
         super().end_headers()
 
     def do_OPTIONS(self):
@@ -387,6 +400,37 @@ class Handler(http.server.SimpleHTTPRequestHandler):
     def do_POST(self):
         u = urllib.parse.urlparse(self.path)
         path = u.path.rstrip("/")
+
+        # Ada 02-Nov-2026 the dismissal writes. /dismiss_all takes the ids the
+        # page had on screen, NOT "everything in the window": an alert that
+        # fired between render and click must not be swallowed unseen.
+        if path in ("/dismiss", "/dismiss_all"):
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "bad json"}).encode("utf-8"))
+                return
+            if path == "/dismiss":
+                if not isinstance(payload.get("id"), str) or not payload["id"]:
+                    self._respond(400, "application/json; charset=utf-8",
+                                  json.dumps({"error": "id required"}).encode("utf-8"))
+                    return
+                ids = dismiss_ids([payload["id"]])
+                body = {"ok": True, "ids": ids}
+            else:
+                wanted = [i for i in (payload.get("ids") or [])
+                          if isinstance(i, str) and i]
+                ids = dismiss_ids(wanted)
+                body = {"ok": True, "count": len(wanted), "ids": ids}
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(body).encode("utf-8"))
+            return
+
         if path == "/history":
             self._respond(405, "application/json; charset=utf-8",
                           json.dumps({"error": "method not allowed"}).encode("utf-8"))
@@ -400,6 +444,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
+
+        if u.path.rstrip("/") in ("/dismissed", "/dismissed.json"):
+            self.no_store = True
+            body = json.dumps({"ids": read_dismissed()}).encode("utf-8")
+            self._respond(200, "application/json; charset=utf-8", body)
+            return
+
         if u.path.rstrip("/") in ("/obstruction.png", "/obstruction"):
             data, err = render_obstruction_map()
             if err or not data:
