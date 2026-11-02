@@ -99,6 +99,25 @@ class TestDismissRoutes(unittest.TestCase):
         status, _, _ = self._req("POST", "/history", {})
         self.assertEqual(status, 405)
 
+    def test_dismiss_write_failure_is_500_json_not_an_empty_reply(self):
+        # van-data.service runs with ReadOnlyPaths=/srv/van/data, so a store
+        # pointed somewhere unwritable is a REACHABLE state, not a hypothetical.
+        # It must answer with JSON that says so: an empty reply (or a silent
+        # success) leaves the page looking like the alert was dismissed when it
+        # was not, which is exactly the bug a human would report as "dismiss
+        # does nothing".
+        ro = tempfile.mkdtemp()
+        os.chmod(ro, 0o500)
+        saved = sd.DISMISSED
+        sd.DISMISSED = os.path.join(ro, "dismissed.json")
+        try:
+            status, _, body = self._req("POST", "/dismiss", {"id": "x"})
+            self.assertEqual(status, 500)
+            self.assertIn("error", json.loads(body))
+        finally:
+            sd.DISMISSED = saved
+            os.chmod(ro, 0o700)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -43,7 +43,14 @@ PORT = 8891
 # from a copy it read at the start of that tick, so a dismissal landing mid-tick
 # would be overwritten and the closed alert would come back. The poller never
 # opens this file.
-DISMISSED = os.path.join(ROOT, "dismissed.json")
+#
+# It is NOT under /srv/van/data, where the snapshot lives, because
+# van-data.service runs with ReadOnlyPaths=/srv/van/data on purpose ("this only
+# reads it" -- the poller is the writer there). Granting this service write
+# access to that directory would let a bug here rewrite van.db. This file is a
+# writer's file, so it lives with the runtime state the server owns; the sandbox
+# on the poller's data stays exactly as it was.
+DISMISSED = "/home/ada/van/var/dismissed.json"
 DISMISS_WINDOW_S = 26 * 3600
 
 
@@ -414,18 +421,27 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                 self._respond(400, "application/json; charset=utf-8",
                               json.dumps({"error": "bad json"}).encode("utf-8"))
                 return
-            if path == "/dismiss":
-                if not isinstance(payload.get("id"), str) or not payload["id"]:
-                    self._respond(400, "application/json; charset=utf-8",
-                                  json.dumps({"error": "id required"}).encode("utf-8"))
-                    return
-                ids = dismiss_ids([payload["id"]])
-                body = {"ok": True, "ids": ids}
-            else:
-                wanted = [i for i in (payload.get("ids") or [])
-                          if isinstance(i, str) and i]
-                ids = dismiss_ids(wanted)
-                body = {"ok": True, "count": len(wanted), "ids": ids}
+            try:
+                if path == "/dismiss":
+                    if not isinstance(payload.get("id"), str) or not payload["id"]:
+                        self._respond(400, "application/json; charset=utf-8",
+                                      json.dumps({"error": "id required"}).encode("utf-8"))
+                        return
+                    ids = dismiss_ids([payload["id"]])
+                    body = {"ok": True, "ids": ids}
+                else:
+                    wanted = [i for i in (payload.get("ids") or [])
+                              if isinstance(i, str) and i]
+                    ids = dismiss_ids(wanted)
+                    body = {"ok": True, "count": len(wanted), "ids": ids}
+            except OSError as e:
+                # A store that cannot be written has to be LOUD. An empty reply,
+                # or a silent success, leaves the page looking like the alert was
+                # dismissed when it was not -- reported as "dismiss does nothing"
+                # with no way to tell why from the browser.
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write dismissal store: %s" % e}).encode("utf-8"))
+                return
             self.no_store = True
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps(body).encode("utf-8"))
