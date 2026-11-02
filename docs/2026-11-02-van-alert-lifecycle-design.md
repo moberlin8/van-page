@@ -176,3 +176,23 @@ the `data-id` attribute; `seq` resets each tick so two ticks in one second would
 handlers; the PLAN doc still names the old store path; `Access-Control-Allow-Origin: *` plus
 unauthenticated write routes allows CSRF-style alert-hiding from any tailnet origin; `19.6rem` is
 a magic number.
+
+**Added later the same day, at Matt's request:**
+- Hovering a row's × lights the whole row (`.evrow:has(.evx:hover)`, shown in `--panel-hi` with the
+  text at `--ink`), because the row is what says which alert the button will close. The row's
+  padding stays at zero: a vertical pad grows the row past the 15.61px the scroll box is measured
+  against, and a horizontal one can add a scrollbar. Verified with CDP `CSS.forcePseudoState` —
+  dispatching a synthetic mouse event does not set `:hover`.
+- "close all" asks first. The dialog is a **sibling** of `.evbar` and `.events`, never inside them:
+  `renderEvents` rewrites both on every tick and would wipe a dialog living in either. The ids are
+  **frozen when the dialog opens**, so the count shown is exactly what confirming takes. Focus lands
+  on cancel, Escape and a backdrop click cancel, and the card says the store is shared.
+  `closeAllPrompt()` is the pure part and is covered by `tests/events.test.mjs`.
+- Verified with real clicks on the live page, ordering the flood at 110 alerts: cancelling (and
+  Escape, and a backdrop click) left all 80 rows and an empty store, and confirming dismissed
+  exactly the 80 on screen while the 30 beyond the display cap survived — the "ids on screen when
+  clicked" rule behaving as designed rather than as an approximation of "everything".
+- `bin/alert-demo.py` (in the companion PR) injects `demo-`-prefixed alerts into the live snapshot for
+  UI testing. It works because `record_events` **preserves** events inside the window rather than
+  rebuilding the list, so injected alerts survive every poll tick. `--flood` drives the 80-row cap
+  and `--clear` removes exactly the synthetic ones.
