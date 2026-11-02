@@ -124,3 +124,55 @@ plus the muted count line.
   (e.g. "N state changes in the last hour") is a separate change and is **not** in this design.
 - The six triggers will produce more events per day than the old 20-entry cap tolerated, which
   is what makes this change necessary in the first place.
+
+---
+
+## Appendix: decisions taken during implementation (02-Nov-2026)
+
+Recorded here because the plan's scratch ledger is deleted once the work lands. Each was a
+deviation from the plan or a call the plan left open; each is in the commit message that made it.
+
+**Plan defects found by the tests (fixed, not worked around):**
+- `record_events` now normalises on the way in. The plan had the call site normalise outside it,
+  but the plan's own Interfaces block promises `{id, ts, msg}` output — enforcing it where the
+  type is produced means a caller cannot emit an id-less, undismissable event.
+- The dismissal tests load `bin/serve-data.py` by path (`importlib.spec_from_file_location`)
+  because the filename has a hyphen and `import serve_data` cannot work.
+- The JS test's marker slice is **line-anchored** (`\n// ---- helpers`). A bare `indexOf` matched
+  a doc comment that quoted both markers, collapsing the slice to 13 lines.
+- `no_store` is a **class** attribute. `BaseRequestHandler.__init__` calls `handle()` itself, so
+  anything set after `super().__init__()` is too late and every response raised `AttributeError`.
+- The plan's store tests would have written to the live store: `path=DISMISSED` as a default
+  argument binds at import time, so a patched module global would not redirect it. Now `path=None`
+  with the lookup inside the body.
+
+**Calls the plan left to the builder:**
+- `age(ts, now)` hoisted out of `load()` to a top-level function, so the renderer can run from a
+  dismissal as well as from a tick. Its three call sites pass `now`.
+- `renderEvents(snap, now)` takes the snapshot explicitly — the page has no global `SNAP` — and
+  `load()` stashes it in `lastSnap` for dismissal-time repaints.
+- The close-all control lives in a new `#evbar` **outside** the scroll box, so the 20-row budget
+  stays 20 alerts rather than 19 plus a button.
+- Row height measured, not assumed: 15.61 px in a 10.4 px font, so 20 rows = 312.19 px and
+  `max-height:19.6rem` (313.6 px) holds 20 and scrolls at 21.
+- An optimistically hidden id stays in `dismissedPending` until the server's list actually
+  contains it, so a slow POST cannot flash the alert back.
+
+**Constraint discovered only by deploying (see the §3 note):** the store cannot live under
+`/srv/van/data`; it is at `/home/ada/van/var/dismissed.json`.
+
+**Post-review fixes** (a fresh reviewer found a race the plan's tests could not):
+- The dismissal read-modify-write is now under a `threading.Lock` and writes to a unique temp
+  file (`tempfile.mkstemp`). Without it, the threaded server + un-awaited POSTs from the page lose
+  dismissals — the reviewer measured 277 of 320 lost, and the lost ids come back, which is a
+  written anti-goal here.
+- The page now checks `r.ok` on a dismissal POST. It used to swallow the 500 the server was built
+  to send, so a refused dismissal left the row hidden until a reload and then returned
+  unexplained. A refusal un-hides the rows and says so.
+
+**Deferred minors** (reviewer-flagged, deliberately not fixed): `esc()` does not escape quotes for
+the `data-id` attribute; `seq` resets每 tick so two ticks in one second would collide on id;
+`normalise_events` raises on a non-dict entry; the JS suite does not cover `renderEvents` or the
+handlers; the PLAN doc still names the old store path; `Access-Control-Allow-Origin: *` plus
+unauthenticated write routes allows CSRF-style alert-hiding from any tailnet origin; `19.6rem` is
+a magic number.
