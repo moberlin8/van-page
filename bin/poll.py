@@ -17,6 +17,8 @@ Design notes:
   * Nothing is written anywhere but this directory.
   * Ada 27-Oct-2026 records notable state changes (SSID, failover, WAN, cell,
     SIM, dish stale/recovery) as an events array in snapshot.json for the page.
+  * Ada 02-Nov-2026 the events now carry a stable id and age out on a 26h window
+    instead of a 20-entry cap, so the page can keep them 24h and dismiss them.
 """
 import json
 import os
@@ -246,6 +248,68 @@ def save_snapshot(snap):
     os.replace(tmp, SNAPSHOT)
 
 
+# Ada 02-Nov-2026 alerts live 24h and are dismissible (Matt): events get a stable
+# id (so a dismissal sticks) and age out on a time window instead of a 20-entry cap.
+EVENT_WINDOW_S = 26 * 3600   # page shows 24h; 26h gives the browser clock-skew margin
+EVENT_KEEP_MAX = 500         # display caps at 80; this bounds snapshot.json
+
+
+def normalise_events(events):
+    """Give every event a stable id. Events that already have one keep it, so an
+    alert dismissed by id is never resurrected by a later renumbering."""
+    out = []
+    for e in events:
+        e = dict(e)
+        if not e.get("id"):
+            e["id"] = str(int(e.get("ts") or 0))
+        out.append(e)
+    return out
+
+
+def record_events(events, prev_delilah, nd, prev_dish_stale, dish_stale, now):
+    """Append state-change events, then age out and cap. Returns the new list.
+
+    Normalises on the way in, so every event this returns carries an id --
+    that invariant is the whole point (a dismissal is addressed by id), and
+    enforcing it here means a caller cannot forget it.
+    """
+    events = normalise_events(events)
+    seq = [0]
+
+    def _evt(msg):
+        events.append({"id": "%d-%d" % (int(now), seq[0]), "ts": now, "msg": msg})
+        seq[0] += 1
+
+    # WiFi SSID
+    _o, _n = prev_delilah.get("ssid"), nd.get("ssid")
+    if _o and _n and _o != _n:
+        _evt("WiFi SSID changed from %s to %s" % (_o, _n))
+    # kmwan failover (wan <-> wwan <-> other)
+    _o, _n = prev_delilah.get("kmwan_active"), nd.get("kmwan_active")
+    if _o and _n and _o != _n:
+        _evt("Failover %s to %s" % (_o, _n))
+    # WiFi WAN port up/down
+    _o, _n = prev_delilah.get("kmwan_wan_up"), nd.get("kmwan_wan_up")
+    if _o is not None and _n is not None and _o != _n:
+        _evt("WAN Port %s" % ("up" if _n else "down"))
+    # cellular health
+    _o, _n = prev_delilah.get("cell_ok"), nd.get("cell_ok")
+    if _o is not None and _n is not None and _o != _n:
+        _evt("Cellular %s" % ("active" if _n else "inactive"))
+    # SIM swap (IMSI)
+    _o, _n = prev_delilah.get("imsi"), nd.get("imsi")
+    if _o and _n and _o != _n:
+        _evt("SIM changed (IMSI %s -> %s)" % (_o, _n))
+    # dish stale / recovered
+    if not prev_dish_stale and dish_stale:
+        _evt("Dish data became stale")
+    elif prev_dish_stale and not dish_stale:
+        _evt("Dish data recovered")
+
+    events = [e for e in events if now - (e.get("ts") or 0) <= EVENT_WINDOW_S]
+    return events[-EVENT_KEEP_MAX:]
+
+
 def main():
     os.makedirs(DATA, exist_ok=True)
     os.makedirs(VAR, exist_ok=True)
@@ -406,39 +470,11 @@ def main():
         snap["delilah_stale"] = True
 
     # ---- record state changes for the /van notifier (Matt, 27-Oct-2026) -----------
-    events = list(snap.get("events", []))
-
-    def _evt(msg):
-        events.append({"ts": now, "msg": msg})
-
-    nd = snap.get("delilah") or {}
-    # WiFi SSID
-    _o, _n = prev_delilah.get("ssid"), nd.get("ssid")
-    if _o and _n and _o != _n:
-        _evt("WiFi SSID changed from %s to %s" % (_o, _n))
-    # kmwan failover (wan <-> wwan <-> other)
-    _o, _n = prev_delilah.get("kmwan_active"), nd.get("kmwan_active")
-    if _o and _n and _o != _n:
-        _evt("Failover %s to %s" % (_o, _n))
-    # WiFi WAN port up/down
-    _o, _n = prev_delilah.get("kmwan_wan_up"), nd.get("kmwan_wan_up")
-    if _o is not None and _n is not None and _o != _n:
-        _evt("WAN Port %s" % ("up" if _n else "down"))
-    # cellular health
-    _o, _n = prev_delilah.get("cell_ok"), nd.get("cell_ok")
-    if _o is not None and _n is not None and _o != _n:
-        _evt("Cellular %s" % ("active" if _n else "inactive"))
-    # SIM swap (IMSI)
-    _o, _n = prev_delilah.get("imsi"), nd.get("imsi")
-    if _o and _n and _o != _n:
-        _evt("SIM changed (IMSI %s -> %s)" % (_o, _n))
-    # dish stale / recovered
-    if not prev_dish_stale and snap.get("dish_stale"):
-        _evt("Dish data became stale")
-    elif prev_dish_stale and not snap.get("dish_stale"):
-        _evt("Dish data recovered")
-
-    snap["events"] = events[-20:]  # cap at 20 most-recent
+    # Ada 02-Nov-2026 the triggers moved into record_events() so the id assignment
+    # and the retention window are unit-testable (tests/test_poll_events.py).
+    snap["events"] = record_events(snap.get("events", []),
+                                   prev_delilah, snap.get("delilah") or {},
+                                   prev_dish_stale, snap.get("dish_stale"), now)
     save_snapshot(snap)
     con.close()
 
