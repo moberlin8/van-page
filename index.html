@@ -124,9 +124,32 @@ a:hover{text-decoration:underline}
 .masthead .meta{
   font-family:var(--font);font-size:1.3125rem;color:var(--faint);
   letter-spacing:.04em}
+/* Ada 02-Nov-2026 the alerts live 24h and are dismissible (Matt). #events is now
+   a scroll box sized to exactly 20 rows: 20 or fewer shows no scrollbar, 21+
+   scrolls. display went inline-block -> block so it can scroll, so the centring
+   moved to max-width + margin:auto. Measured on the live page (not assumed): one
+   row is 15.61px (font-size .65rem, computed line-height 15.6px), so 20 rows =
+   312.19px, and 19.6rem (313.6px) holds all 20 and scrolls at 21. Re-measure if
+   the type scale changes again -- it has been scaled twice already. */
 .masthead .events{font-family:var(--font);font-size:.65rem;color:var(--dim);
-  letter-spacing:.04em;margin:.25rem auto 0;display:inline-block;text-align:left;
-  white-space:pre-line;overflow-wrap:break-word}
+  letter-spacing:.04em;margin:.15rem auto 0;display:block;text-align:left;
+  overflow-wrap:break-word;overflow-y:auto;max-height:19.6rem;
+  max-width:min(100%,52rem)}
+/* the close-all control sits ABOVE the scroll box, outside it, so the 20-row
+   budget stays 20 alerts rather than 20 rows minus the control. Right-aligned so
+   it lines up with the per-row dismiss buttons. */
+.masthead .evbar{font-family:var(--font);font-size:.65rem;letter-spacing:.04em;
+  color:var(--faint);margin:.25rem auto 0;max-width:min(100%,52rem);
+  text-align:right}
+.masthead .evrow{display:flex;gap:.5rem;align-items:baseline;
+  justify-content:space-between}
+.masthead .evrow .evtxt{overflow-wrap:break-word}
+.masthead .evx,.masthead #evcloseall{background:none;border:0;color:var(--faint);
+  font:inherit;letter-spacing:inherit;cursor:pointer;padding:0 .2rem;line-height:1}
+.masthead .evx:hover,.masthead #evcloseall:hover{color:var(--dim)}
+.masthead .evx:focus-visible,.masthead #evcloseall:focus-visible{
+  outline:2px solid var(--info);outline-offset:2px}
+.masthead .evmore{color:var(--faint);font-style:italic}
 
 /* the layout is deliberately narrow: this is a status wall, not a dashboard */
 .wrap{max-width:1120px;margin:0 auto}
@@ -694,6 +717,9 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
   <div class="sub"><a href="#dish">Starlink EvilDish</a> <span class="ago" id="ago-dish">&hellip;</span><br>
     <a href="#router">Delilah Router</a> <span class="ago" id="ago-router">&hellip;</span></div>
   <div class="meta"><span id="stalemark"></span></div>
+  <!-- Ada 02-Nov-2026 the close-all control lives outside #events so the scroll
+       box's 20-row budget stays 20 alerts (Matt). -->
+  <div class="evbar" id="evbar"></div>
   <div class="events" id="events"></div>
 </div>
 
@@ -1400,6 +1426,131 @@ const statsOf = (vals) => {
 
 // One row per series, min / max / avg / current -- the same shape as the stat
 // tables under the reference dashboard's charts.
+// ---- alerts: 24h retention + shared dismissal (Ada 02-Nov-2026, Matt) --------
+// Deliberately OUTSIDE the `// ---- helpers` slice that tests/events.test.mjs
+// evals: this region touches the network and the DOM at top level, and the
+// helper slice has to stay free of side effects.
+const DISMISSED_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismissed";
+const DISMISS_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismiss";
+const DISMISS_ALL_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismiss_all";
+
+// age(ts, now) moved here from inside load() so the alert renderer can run from
+// a dismissal as well as from a tick. Body unchanged, 200-second threshold
+// included.
+function age(ts, now) {
+  if (!ts) return "&mdash;";
+  const s = Math.round(now - ts);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const w = (n, word) => n === 1 ? word : word + "s";
+  if (h > 0) return h + " " + w(h, "hour") + " " + m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+  if (s >= 200) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+  return s + " " + w(s, "second");
+}
+
+let dismissedIds = {};      // ids the server has confirmed closed
+let dismissedPending = {};  // ids hidden optimistically, not yet confirmed
+let lastSnap = {};          // the newest snapshot, so a dismissal can repaint now
+
+async function loadDismissed() {
+  try {
+    const r = await fetch(DISMISSED_URL);
+    const j = await r.json();
+    dismissedIds = (j && j.ids) || {};
+    // An id stays pending (hidden) until the server's list actually contains it,
+    // so a slow or failed POST cannot make a just-closed alert reappear.
+    const keep = {};
+    for (const id in dismissedPending) {
+      if (!Object.prototype.hasOwnProperty.call(dismissedIds, id)) keep[id] = dismissedPending[id];
+    }
+    dismissedPending = keep;
+  } catch (e) { /* keep the last known dismissals; the next tick retries */ }
+}
+
+async function postDismiss(url, body) {
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (j && j.ids) dismissedIds = j.ids;
+  } catch (e) { /* stays pending; loadDismissed() decides on the next tick */ }
+}
+
+function dismissOne(id) {
+  if (!id) return;
+  const t = Date.now() / 1000;
+  dismissedPending[id] = t;
+  renderEvents(lastSnap, t);
+  postDismiss(DISMISS_URL, { id: id });
+}
+
+function dismissAll() {
+  const ids = [];
+  document.querySelectorAll("#events .evrow").forEach(function (n) {
+    const id = n.getAttribute("data-id");
+    if (id) ids.push(id);
+  });
+  if (!ids.length) return;
+  const t = Date.now() / 1000;
+  ids.forEach(function (id) { dismissedPending[id] = t; });
+  renderEvents(lastSnap, t);
+  postDismiss(DISMISS_ALL_URL, { ids: ids });
+}
+
+// Delegated on document: #events is re-rendered on every tick, so per-row
+// listeners would be discarded (same reason the info-circle tips delegate).
+document.addEventListener("click", function (e) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  const x = t.closest(".evx");
+  if (x) { dismissOne(x.getAttribute("data-id")); return; }
+  if (t.closest("#evcloseall")) dismissAll();
+});
+
+// Paints the close-all bar and the alert rows. Renders at most
+// EVENT_DISPLAY_MAX rows and says so when there are more, because 80 alerts in
+// a day means something is flapping (Matt).
+function renderEvents(snap, now) {
+  const ev = $("events");
+  if (!ev) return;
+  const bar = $("evbar");
+  const vis = visibleEvents((snap && snap.events) || [], now, dismissedIds, dismissedPending);
+  if (!vis.list.length) {
+    ev.style.display = "none";
+    ev.innerHTML = "";
+    if (bar) bar.innerHTML = "";
+    return;
+  }
+  ev.style.display = "";
+  if (bar) {
+    bar.innerHTML = '<button type="button" id="evcloseall"'
+                  + ' title="dismiss every alert shown">close all</button>';
+  }
+  let html = vis.list.map(function (e) {
+    const id = esc(eventId(e));
+    return '<div class="evrow" data-id="' + id + '">'
+         + '<span class="evtxt">' + esc(age(e.ts, now) + " ago: " + e.msg) + '</span>'
+         + '<button type="button" class="evx" data-id="' + id + '" title="dismiss">\u00d7</button>'
+         + '</div>';
+  }).join("");
+  if (vis.total > vis.list.length) {
+    html += '<div class="evmore">showing ' + vis.list.length + " of " + vis.total
+          + ' alerts in the last 24h</div>';
+  }
+  ev.innerHTML = html;
+}
+
+// Poll the shared list on the snapshot's cadence, and repaint as soon as an
+// answer arrives -- that is how a dismissal made on the other device shows up.
+loadDismissed().then(function () { renderEvents(lastSnap, Date.now() / 1000); });
+setInterval(function () {
+  loadDismissed().then(function () { renderEvents(lastSnap, Date.now() / 1000); });
+}, 15000);
+
 async function load() {
   let snap = null;
   try {
@@ -1424,20 +1575,13 @@ async function load() {
   // Ada 27-Oct-2026 threshold for showing minutes is now 200 seconds (Matt):
   // below 200s is "198 seconds", at 200s+ is "3 minutes 20 seconds". Seconds-only
   // until the number would read as awkward in words, then convert.
-  const age = (ts) => {
-    if (!ts) return "&mdash;";
-    const s = Math.round(now - ts);
-    const h = Math.floor(s / 3600);
-    const m = Math.floor((s % 3600) / 60);
-    const sec = s % 60;
-    const w = (n, word) => n === 1 ? word : word + "s";
-    if (h > 0) return h + " " + w(h, "hour") + " " + m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
-    if (s >= 200) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
-    return s + " " + w(s, "second");
-  };
+  // Ada 02-Nov-2026 age() moved out to the alert module below (it is a pure
+  // formatter) so the alert renderer can run from a dismissal as well as from
+  // this tick. The 200-second switch between "N seconds" and "N minutes N
+  // seconds" is unchanged.
   const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
-  if (agoDish) agoDish.textContent = age(snap.dish_ts);
-  if (agoRouter) agoRouter.textContent = age(snap.delilah_ts);
+  if (agoDish) agoDish.textContent = age(snap.dish_ts, now);
+  if (agoRouter) agoRouter.textContent = age(snap.delilah_ts, now);
 
   const stale = [];
   let urgent = false;
@@ -1455,27 +1599,12 @@ async function load() {
       ? '<span class="stale' + (urgent ? ' stale-red' : '') + '">stale: '
         + esc(stale.join(", ")) + '</span>' : "";
   }
-  // Ada 27-Oct-2026 render state-change events below the stale mark (Matt).
-  // Each event carries a timestamp (ts); show only the last 15 minutes, then
-  // auto-expire it so stale noise fades off the page.
-  var ev = $("#events");
-  if (ev) {
-    if (snap.events && snap.events.length) {
-      var recent = snap.events.filter(function(e) {
-        return e.ts && (now - e.ts) <= 900;
-      }).slice(-5);
-      if (recent.length) {
-        ev.style.display = "";
-        ev.textContent = recent.map(function(e) {
-          return age(e.ts) + " ago: " + e.msg;
-        }).join("\n");
-      } else {
-        ev.style.display = "none";
-      }
-    } else {
-      ev.style.display = "none";
-    }
-  }
+  // Ada 02-Nov-2026 the alerts live 24h and are dismissible (Matt). visibleEvents()
+  // does the window / dismissed / 80-cap filtering and is unit-tested; renderEvents()
+  // only paints. lastSnap is kept so a dismissal can re-render immediately instead
+  // of waiting up to 15s for the next tick.
+  lastSnap = snap;
+  renderEvents(snap, now);
   // device controls panel: separate from #dish (which re-renders every 15s), so
   // it survives the tick and picks up the fresh config on the next poll.
 
