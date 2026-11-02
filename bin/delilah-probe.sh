@@ -3,9 +3,12 @@
 # /van page. Runs ON DELILAH over ssh; writes JSON to stdout, nothing else.
 # Ada 01-Nov-2026 failover: poll all kmwan members (including secondwan and
 # modem_0001), ordered by metric; emit kmwan_members JSON array for the page.
+# Ada 02-Nov-2026 trap-clean the /tmp/kmwan_list.*+kmwan_members.* temp files so a
+# killed probe cannot leak them into /tmp.
 # Deliberately dependency-free: sh, uci, ubus, awk, iwinfo, /proc only.
-# Modem is DISABLED on this build (uci modem_0001.disabled=1), so cell fields
-# come out null rather than absent -- the page renders "modem disabled".
+# Modem: uci modem_0001.disabled is 0 as of 02-Nov-2026 (SIM2/RoamLink armed as a
+# metric-3 failover member), so cell fields are live; they came out null while the
+# interface was disabled.
 set -u
 
 # --- system -----------------------------------------------------------------
@@ -139,6 +142,12 @@ KM_SENS=$(uci -q get kmwan.global.sensitivity)
 # highest priority), including secondwan and modem_0001. The page shows the top
 # three from this ordered list.
 _TMP=/tmp/kmwan_list.$$
+_TMP2=/tmp/kmwan_members.$$
+# Ada 02-Nov-2026 clean these up on ANY exit. poll.py kills this probe when the
+# ssh call hits its 45s timeout, so the rm at the end of the script never ran and
+# kmwan_list.* files accumulated in /tmp forever (7 found on 02-Nov). The trap
+# defers expansion, and ${VAR:-} keeps the trap safe under `set -u`.
+trap 'rm -f "${_TMP:-}" "${_TMP2:-}"' EXIT INT TERM HUP
 uci show kmwan | grep '=member$' | cut -d= -f1 | while read -r section; do
   interface=$(uci -q get "$section.interface")
   metric=$(uci -q get "$section.metric")
@@ -152,7 +161,6 @@ done | sort -t'|' -k1 -n > "$_TMP"
 # the member the routing table actually prefers: lowest metric among live ones
 KM_ACTIVE=""
 KM_ACTIVE_METRIC=999
-_TMP2=/tmp/kmwan_members.$$
 while IFS='|' read -r metric interface; do
   UP=""
   if [ "$interface" = "modem_0001" ]; then
