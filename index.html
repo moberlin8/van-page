@@ -1386,22 +1386,6 @@ function routerSection(r) {
         row("WAN Uptime", fmtUptime(r.kmwan_active_uptime)),
       ],
       "rows4")}
-    ${box("repeater",
-      `<p><b>Signal</b> &mdash; the WiFi client&rsquo;s received strength. -50 dBm is
-        excellent, -67 dBm is the usual floor for high rates, -80 dBm is the edge of
-        usability. <b>Bitrate</b> is the current link rate on HE80, where 1200 Mb/s
-        is this association&rsquo;s ceiling. Colour follows those bands.</p>`,
-      [
-        row("Signal", (w.signal_dbm == null ? null : w.signal_dbm + " dBm"), z(w.signal_dbm, "signal")),
-        row("Bitrate", (w.bitrate == null ? null : w.bitrate + " Mb/s"), z(w.bitrate, "bitrate")),
-        row("Noise", w.noise_dbm == null ? null : w.noise_dbm + " dBm"),
-        row("Quality", (w.link_quality == null ? null
-          : w.link_quality + "/" + (w.link_quality_max || "?"))),
-        row("SSID", orDash(clean(w.ssid))),
-        row("Channel", (w.channel == null ? null
-          : w.channel + " " + (w.freq_ghz || "") + " GHz")),
-      ])}
-
     ${box("resources",
       `<p><b>RAM</b> is the router&rsquo;s memory in use; 70% is where pressure
         starts and 85% is serious on a 512 MB box. <b>Storage</b> is the root
@@ -1436,6 +1420,22 @@ function routerSection(r) {
         fwRow(w),
         row("Update", orDash(fwDate(w.router_fw_date)), "small"),
       ], "rows7")}
+    ${box("repeater",
+      `<p><b>Signal</b> &mdash; the WiFi client&rsquo;s received strength. -50 dBm is
+        excellent, -67 dBm is the usual floor for high rates, -80 dBm is the edge of
+        usability. <b>Bitrate</b> is the current link rate on HE80, where 1200 Mb/s
+        is this association&rsquo;s ceiling. Colour follows those bands.</p>`,
+      [
+        row("Signal", (w.signal_dbm == null ? null : w.signal_dbm + " dBm"), z(w.signal_dbm, "signal")),
+        row("Bitrate", (w.bitrate == null ? null : w.bitrate + " Mb/s"), z(w.bitrate, "bitrate")),
+        row("Noise", w.noise_dbm == null ? null : w.noise_dbm + " dBm"),
+        row("Quality", (w.link_quality == null ? null
+          : w.link_quality + "/" + (w.link_quality_max || "?"))),
+        row("SSID", orDash(clean(w.ssid))),
+        row("Channel", (w.channel == null ? null
+          : w.channel + " " + (w.freq_ghz || "") + " GHz")),
+      ])}
+
 
 
     ${box("cellular",
