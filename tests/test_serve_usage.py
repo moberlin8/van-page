@@ -45,6 +45,12 @@ class TestManualLumpWindow(unittest.TestCase):
     def test_period_before_the_window_gets_nothing(self):
         self.assertEqual((0.0, 0.0), sd.manual_lump_for(ts(2026, 9, 1), ts(2026, 9, 25)))
 
+    def test_a_later_october_gets_nothing_either(self):
+        # The window is a fixed 2026 date range, not "late October": the cycle that
+        # contains 21-24 Oct 2027 is 25-Sep-2027 -> 24-Oct-2027 and must not pick it up.
+        self.assertEqual((0.0, 0.0), sd.manual_lump_for(ts(2027, 9, 25), ts(2027, 10, 24, 23)))
+        self.assertEqual((0.0, 0.0), sd.manual_lump_for(ts(2030, 1, 1), ts(2030, 1, 25)))
+
 
 class TestReadUsage(unittest.TestCase):
     """read_usage must sum this period's rows for real, and take its db by argument."""
