@@ -288,6 +288,31 @@ def read_history(hours, fields):
 # is a constant here. Change it if the account's billing day changes.
 BILLING_DAY = 25
 
+# Ada 06-Nov-2026 the one manual figure in this file, scoped to the period it belongs to.
+# The database's first dish sample is 20-Oct-2026, so the Oct 21-24 roaming traffic has no
+# rows and was added as a flat 15.8 GB (split by the down/up ratio of the real Oct 22-24
+# data). It was added to EVERY period, which from 25-Oct meant counting the previous
+# cycle's usage into this one: the page read 68.5 GB where the account read 51 GB, and the
+# lump is the whole gap. It is now applied only when the period actually contains those days.
+MANUAL_WINDOW = ("2026-10-21", "2026-10-25")   # UTC, [start, end)
+MANUAL_TOTAL = 15.8e9
+MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
+
+
+def manual_lump_for(start, end):
+    """(down, up) of the un-covered Oct 21-24 roaming, or (0.0, 0.0) if absent.
+
+    `start`/`end` are period bounds as epoch seconds (UTC), inclusive end.
+    """
+    import datetime as _dt
+    w0 = _dt.datetime.strptime(MANUAL_WINDOW[0], "%Y-%m-%d").replace(
+        tzinfo=_dt.timezone.utc).timestamp()
+    w1 = _dt.datetime.strptime(MANUAL_WINDOW[1], "%Y-%m-%d").replace(
+        tzinfo=_dt.timezone.utc).timestamp()
+    if end < w0 or start >= w1:
+        return (0.0, 0.0)
+    return (MANUAL_TOTAL * MANUAL_SPLIT[0], MANUAL_TOTAL * MANUAL_SPLIT[1])
+
 
 def billing_period(now=None):
     """Return (start_ts, end_ts) of the current Starlink billing period, UTC."""
@@ -307,8 +332,11 @@ def billing_period(now=None):
     return start.timestamp(), end.timestamp()
 
 
-def read_usage():
+def read_usage(db=None):
     """Total bytes moved in the current billing period.
+
+    `db` defaults to None and resolves the module global in the body, so a test can point
+    it at a temporary store without patching this module's state (see tests/).
 
     Ada 24-Oct-2026 the dish's usage counters are ROLLING, not cumulative: over
     the 2 days in the database usage_down gained 3301 MB and lost 3297 MB, so the
@@ -316,11 +344,13 @@ def read_usage():
     sum of the increases, which is real bytes moved. Small drops lose a little,
     so the result is a slight over-count.
     """
-    if not os.path.exists(DB):
+    if db is None:
+        db = DB
+    if not os.path.exists(db):
         return None, "no database yet"
     start, end = billing_period()
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True, timeout=10)
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
     except sqlite3.Error as e:
         return None, "cannot open usage: %s" % e
     try:
@@ -347,11 +377,8 @@ def read_usage():
             prev_u = u
 
     now = time.time()
-    # Ada 01-Nov-2026 add manual Oct 21-24 roaming totals (split by the same
-    # down/up ratio as the real Oct 22-24 data). The dish had no samples before
-    # Oct 22, so those four days are not represented in the DB.
-    manual_down = 15.8e9 * (3.541 / 5.494)
-    manual_up = 15.8e9 * (1.953 / 5.494)
+    # Ada 06-Nov-2026 the lump, only for a period that contains Oct 21-24 (see MANUAL_WINDOW).
+    manual_down, manual_up = manual_lump_for(start, end)
     down += manual_down
     up += manual_up
     return {
@@ -369,6 +396,14 @@ def read_usage():
         "covered_from": rows[0][0],
         "covered_to": rows[-1][0],
         "samples": len(rows),
+        # Ada 06-Nov-2026 say whether the manual figure was counted, and how much of it,
+        # so nobody has to read this file to know what the total is made of.
+        "manual_lump": {
+            "applied": bool(manual_down or manual_up),
+            "down": manual_down,
+            "up": manual_up,
+            "window": "%s..%s" % MANUAL_WINDOW,
+        },
     }, None
 
 
