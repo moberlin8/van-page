@@ -145,6 +145,39 @@ CREATE INDEX IF NOT EXISTS idx_dish_ts ON dish(ts);
 -- Ada 06-Nov-2026 one row per poll per SIM, so the cycle total survives the router's counter
 -- resets and can be charted (plan §6/Task 4). `total_bytes` is carried + period, which is what
 -- the page shows.
+-- Ada 06-Nov-2026 workstream D: the router's numbers, one row per poll. The page can only show a
+-- snapshot of Delilah today; a burn rate, a failover at 03:00, or "was the signal worse before the
+-- reboot" all need history. Text columns are the state that changes (active path, SSID, APN).
+CREATE TABLE IF NOT EXISTS router (
+    ts            REAL PRIMARY KEY,
+    signal_dbm    REAL,
+    noise_dbm     REAL,
+    bitrate       REAL,
+    link_quality  REAL,
+    ssid          TEXT,
+    channel       REAL,
+    wwan_uptime   REAL,
+    kmwan_active  TEXT,
+    kmwan_level   REAL,
+    kmwan_metric  REAL,
+    csq           REAL,
+    qcsq          TEXT,
+    temp_c        REAL,
+    load1         REAL,
+    mem_avail     REAL,
+    mem_total     REAL,
+    uptime        REAL,
+    rx_bytes      REAL,
+    tx_bytes      REAL,
+    sim_slot      INTEGER,
+    traffic_sim1  REAL,
+    traffic_sim2  REAL,
+    cell_ok       INTEGER,
+    cereg         TEXT,
+    cops          TEXT,
+    apn           TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_router_ts ON router(ts);
 CREATE TABLE IF NOT EXISTS sim (
     ts           REAL PRIMARY KEY,
     slot         INTEGER,
@@ -182,6 +215,42 @@ def dish_terminal(status):
     without identity is not the same as "the same dish as the last one".
     """
     return (status.get("id"), status.get("hardware_version"))
+
+
+# Ada 06-Nov-2026 workstream D. The probe hands back strings and several are not a single number:
+# csq is "rssi,ber", load is a three-value average, link_quality is "70/70". Keep the first number
+# in each case and null the rest - a chart wants one value, and the second one is not a measurement.
+ROUTER_COLUMNS = (
+    "signal_dbm", "noise_dbm", "bitrate", "link_quality", "ssid", "channel",
+    "wwan_uptime", "kmwan_active", "kmwan_level", "kmwan_metric", "csq", "qcsq",
+    "temp_c", "load1", "mem_avail", "mem_total", "uptime", "rx_bytes", "tx_bytes",
+    "sim_slot", "traffic_sim1", "traffic_sim2", "cell_ok", "cereg", "cops", "apn",
+)
+ROUTER_TEXT = ("ssid", "kmwan_active", "qcsq", "cereg", "cops", "apn")
+ROUTER_SOURCE = {"kmwan_metric": "kmwan_active_metric", "load1": "load"}
+
+
+def first_num(v):
+    """The first number in "18,99", "0.12 0.10 0.08" or "70/70"; None when there is none."""
+    if v is None:
+        return None
+    for part in str(v).replace("/", " ").replace(",", " ").split():
+        n = num(part)
+        if n is not None:
+            return n
+    return None
+
+
+def router_row(now, r):
+    """One `router` row from a probe result: numbers where a number exists, text where it is text."""
+    row = {"ts": now}
+    for col in ROUTER_COLUMNS:
+        v = r.get(ROUTER_SOURCE.get(col, col))
+        if col in ROUTER_TEXT:
+            row[col] = (str(v).strip() or None) if v is not None else None
+        else:
+            row[col] = first_num(v)
+    return row
 
 
 def sim_cycle_start(now, day=28, hour=0):
@@ -582,6 +651,18 @@ def main():
         except Exception as e:
             snap["sim_error"] = str(e)[:200]
             log("sim FAILED: %s" % e)
+
+        # ---- router history (plan §7 / workstream D) -----------------------------
+        try:
+            _row = router_row(now, r)
+            con.execute(
+                "INSERT OR REPLACE INTO router (%s) VALUES (%s)"
+                % (", ".join(_row.keys()), ", ".join("?" * len(_row))),
+                tuple(_row.values()))
+            con.commit()
+        except Exception as e:
+            snap["router_error"] = str(e)[:200]
+            log("router history FAILED: %s" % e)
     except Exception as e:
         snap["delilah_stale"] = True
         snap["delilah_error"] = str(e)[:300]

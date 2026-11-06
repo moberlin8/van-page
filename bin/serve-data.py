@@ -277,26 +277,46 @@ def render_obstruction_map():
     return data, None
 
 
-def read_history(hours, fields):
-    """Columnar history from van.db. Returns (payload_dict, error_str)."""
-    if not os.path.exists(DB):
-        return None, "no history database yet"
-    want = [f for f in fields if f in FIELDS]
-    if not want:
-        return None, "no usable fields requested"
+# Ada 06-Nov-2026 workstream D: the router's own history, same columnar contract as the dish.
+# The dish table is all numbers; the router's carries state words too (active path, SSID, APN),
+# which must come back as text rather than being forced through float().
+FIELDS_ROUTER = {c: c for c in (
+    "signal_dbm", "noise_dbm", "bitrate", "link_quality", "channel", "wwan_uptime",
+    "kmwan_level", "kmwan_metric", "csq", "temp_c", "load1", "mem_avail", "mem_total",
+    "uptime", "rx_bytes", "tx_bytes", "sim_slot", "traffic_sim1", "traffic_sim2", "cell_ok",
+)}
+FIELDS_ROUTER_TEXT = {c: c for c in ("ssid", "kmwan_active", "qcsq", "cereg", "cops", "apn")}
+HISTORY_TABLES = {
+    "dish": {"fields": FIELDS, "text": set()},
+    "router": {"fields": dict(FIELDS_ROUTER, **FIELDS_ROUTER_TEXT),
+               "text": set(FIELDS_ROUTER_TEXT)},
+}
 
-    cols = ", ".join(["ts"] + [FIELDS[f] for f in want])
+
+def read_history(hours, fields, table="dish", db=None):
+    """Columnar history from van.db. Returns (payload_dict, error_str)."""
+    db = DB if db is None else db
+    spec = HISTORY_TABLES.get(table)
+    if spec is None:
+        return None, "unknown table %r (have: %s)" % (table, ", ".join(sorted(HISTORY_TABLES)))
+    if not os.path.exists(db):
+        return None, "no history database yet"
+    want = [f for f in fields if f in spec["fields"]]
+    if not want:
+        return None, "no usable fields requested for %s: field not stored" % table
+
+    cols = ", ".join(["ts"] + [spec["fields"][f] for f in want])
     since = time.time() - hours * 3600
 
     # mode=ro: never create or write the poller's file. uri=True is required for
     # the query-string form; timeout lets a poll in flight finish first.
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True, timeout=10)
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
     except sqlite3.Error as e:
         return None, "cannot open history: %s" % e
     try:
         rows = con.execute(
-            "SELECT %s FROM dish WHERE ts >= ? ORDER BY ts ASC" % cols, (since,)
+            "SELECT %s FROM %s WHERE ts >= ? ORDER BY ts ASC" % (cols, table), (since,)
         ).fetchall()
     except sqlite3.Error as e:
         return None, "cannot read history: %s" % e
@@ -314,7 +334,10 @@ def read_history(hours, fields):
     out = {"hours": hours, "count": len(rows),
            "from": rows[0][0], "to": rows[-1][0], "ts": [r[0] for r in rows]}
     for i, f in enumerate(want):
-        out[f] = [None if r[i + 1] is None else float(r[i + 1]) for r in rows]
+        if f in spec["text"]:
+            out[f] = [r[i + 1] for r in rows]
+        else:
+            out[f] = [None if r[i + 1] is None else float(r[i + 1]) for r in rows]
     return out, None
 
 
@@ -693,7 +716,8 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hours = max(0.25, min(24 * 30, hours))
             fields = [f for f in q.get("fields", [""])[0].split(",") if f]
 
-            payload, err = read_history(hours, fields)
+            table = (q.get("table", ["dish"])[0] or "dish").strip()
+            payload, err = read_history(hours, fields, table=table)
             if err:
                 self._respond(404, "application/json; charset=utf-8",
                               json.dumps({"error": err, "hours": hours}).encode("utf-8"))
