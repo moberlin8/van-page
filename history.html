@@ -1,0 +1,1443 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rocco van &mdash; history</title>
+<link rel="stylesheet" href="assets/uplot/uPlot.min.css">
+<style>
+/* ## Ada 22-Oct-2026 the harlan dashboard's own font bundle, reused verbatim.
+   /srv/media-stack/homepage/custom.css embeds Westminster as a base64 TTF
+   (Microsoft core font, 50 KB); this page ships the same file locally so it
+   never leaves its origin. Westminster is used ONLY for the masthead -- the
+   tiles and gauges use the same monospace stack as harlan's cards. */
+@font-face{
+  font-family:'Westminster';
+  font-style:normal;font-weight:400;font-display:swap;
+  src:url('assets/fonts/westminster.ttf') format('truetype');
+}
+
+/* Ada 22-Oct-2026 palette corrected against the LIVE harlan dashboard.
+   Measured with getComputedStyle on http://127.0.0.1:8888/ (html class
+   "dark scheme-dark theme-slate"), not guessed from the Tailwind ramp:
+     page background   rgb(30,41,59)            = slate-800   (was slate-950)
+     card background   white at 5% alpha, NO border          (was solid slate-900 + 1px border)
+     bar track         rgba(148,163,184,.22)    = slate-400 at 22%
+     stat value colour rgb(255,255,255)         = white      (was slate-100)
+   harlan's tile titles are slate-200 and its descriptions slate-300. */
+:root{
+  --bg:#1e293b;                     /* slate-800 - harlan's page background */
+  --panel:rgba(255,255,255,.05);    /* harlan's card wash */
+  --panel-hi:rgba(255,255,255,.10); /* header emphasis / hover */
+  --line:rgba(148,163,184,.16);     /* hairline only: cards carry no border */
+  --ink:#ffffff;                    /* harlan's stat values */
+  --title:#e2e8f0;                  /* slate-200 - harlan's tile titles/hostname */
+  --dim:#cbd5e1;                    /* slate-300 */
+  --faint:#94a3b8;                  /* slate-400 */
+  --ok:#34d399;                     /* emerald-400 */
+  --warn:#fbbf24;                   /* amber-400 */
+  --bad:#fb7185;                    /* rose-400 */
+  --info:#38bdf8;                   /* sky-400 */
+  --track:rgba(148,163,184,.22);    /* harlan's bar track */
+  /* harlan's cards are Plex Mono; fall back to the same stack */
+  --font:'Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;
+  --display:'Westminster',var(--font);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:var(--font);
+  font-size:28px;line-height:1.5;padding:2rem 1.5rem 4rem;
+  -webkit-font-smoothing:antialiased}
+a{color:var(--info);text-decoration:none}
+a:hover{text-decoration:underline}
+
+/* ---- masthead: big centred Westminster title, smaller subhead, then body ---- */
+.masthead{text-align:center;margin:0 0 2.2rem}
+/* Ada 23-Oct-2026 the masthead went up 160% at Matt's request: 2.69rem ->
+   6.99rem (43px -> 112px). It is the page's only display-size element, so the
+   body text was deliberately left alone -- a bigger masthead over the same
+   body is what makes it read as a masthead rather than as a big paragraph. */
+.masthead h1{
+  font-family:var(--display);font-weight:600;
+  /* Ada 24-Oct-2026 the title is "rocco van" now, which is 3x wider than "van":
+     6.99rem is 112px and "rocco van" is ~765px wide, so a phone (342px of room)
+     would overflow. clamp() keeps 112px on a desktop and scales down to fit. */
+  font-size:clamp(2.6rem, 11vw, 6.99rem);line-height:1;margin:0 0 .7rem;
+  letter-spacing:.16em;color:var(--title)}
+.masthead .sub{
+  font-family:var(--display);font-size:1.75rem;
+  color:var(--dim);margin:0 0 .35rem;letter-spacing:.02em}
+/* Ada 24-Oct-2026 the two device names are links to their sections (Matt). They
+   keep the masthead's look -- no blue, no underline until hovered. */
+.masthead .sub a{color:inherit;text-decoration:none}
+.masthead .sub a:hover{color:var(--ink);text-decoration:underline}
+.masthead .sub a:focus-visible{outline:2px solid var(--info);outline-offset:2px}
+/* Ada 24-Oct-2026 the "Ns" age of each device sits right after its name in the
+   masthead, in grey plain mono text (Matt) -- not the display font, and not a
+   separate line. The meta line that used to carry it is gone. */
+.masthead .ago{font-family:var(--font);font-size:.6em;
+  color:var(--faint);letter-spacing:.04em;white-space:nowrap}
+.masthead .meta{
+  font-family:var(--font);font-size:1.3125rem;color:var(--faint);
+  letter-spacing:.04em}
+/* Ada 02-Nov-2026 the alerts live 24h and are dismissible (Matt). #events is now
+   a scroll box sized to exactly 20 rows: 20 or fewer shows no scrollbar, 21+
+   scrolls. display went inline-block -> block so it can scroll, so the centring
+   moved to max-width + margin:auto. Measured on the live page (not assumed): one
+   row is 15.61px (font-size .65rem, computed line-height 15.6px), so 20 rows =
+   312.19px, and 19.6rem (313.6px) holds all 20 and scrolls at 21. Re-measure if
+   the type scale changes again -- it has been scaled twice already. */
+.masthead .events{font-family:var(--font);font-size:.65rem;color:var(--dim);
+  letter-spacing:.04em;margin:.15rem auto 0;display:block;text-align:left;
+  overflow-wrap:break-word;overflow-y:auto;max-height:19.6rem;
+  max-width:min(100%,52rem)}
+/* the close-all control sits ABOVE the scroll box, outside it, so the 20-row
+   budget stays 20 alerts rather than 20 rows minus the control. Right-aligned so
+   it lines up with the per-row dismiss buttons. */
+.masthead .evbar{font-family:var(--font);font-size:.65rem;letter-spacing:.04em;
+  color:var(--faint);margin:.25rem auto 0;max-width:min(100%,52rem);
+  text-align:right}
+.masthead .evrow{display:flex;gap:.5rem;align-items:baseline;
+  justify-content:space-between;border-radius:2px}
+/* Ada 02-Nov-2026 hovering the dismiss button lights up its whole row (Matt), so
+   it is obvious which alert the x is about to close. :has() keys the row off the
+   BUTTON's hover rather than the row's -- hovering the message text alone does
+   nothing, and the row is the only thing that says which event is at stake.
+   Deliberately no padding: a vertical pad would grow the row past the 15.61px the
+   scroll box is measured against, and a horizontal one risks a horizontal
+   scrollbar. The band is exactly the row box. */
+.masthead .evrow:has(.evx:hover){background:var(--panel-hi)}
+.masthead .evrow:has(.evx:hover) .evtxt{color:var(--ink)}
+.masthead .evrow .evtxt{overflow-wrap:break-word}
+.masthead .evx,.masthead #evcloseall{background:none;border:0;color:var(--faint);
+  font:inherit;letter-spacing:inherit;cursor:pointer;padding:0 .2rem;line-height:1}
+.masthead .evx:hover,.masthead #evcloseall:hover{color:var(--dim)}
+.masthead .evx:focus-visible,.masthead #evcloseall:focus-visible{
+  outline:2px solid var(--info);outline-offset:2px}
+.masthead .evmore{color:var(--faint);font-style:italic}
+/* Ada 02-Nov-2026 the dismissal store can refuse a write (it answers 500 JSON);
+   the row comes back and this says why, rather than the alert vanishing and
+   reappearing later. */
+.masthead .everr{color:var(--warn)}
+/* Ada 02-Nov-2026 "close all" asks first (Matt). It is the one destructive
+   control on the page and a mis-tap takes every alert with it.
+   The dialog is a SIBLING of .evbar and .events, never inside them:
+   renderEvents rewrites both on every tick, so a dialog living in either would
+   be wiped mid-decision. No ancestor of .masthead sets transform/filter/contain,
+   so position:fixed here really is the viewport (checked, 02-Nov-2026). */
+.masthead .evdlg{position:fixed;inset:0;z-index:50;display:none;
+  align-items:center;justify-content:center;background:rgba(2,6,23,.72)}
+.masthead .evdlg[data-open="1"]{display:flex}
+.masthead .evcard{background:var(--bg);border:1px solid var(--line);
+  border-radius:6px;padding:.85rem 1rem;max-width:min(92vw,22rem);
+  font-family:var(--font);font-size:.7rem;letter-spacing:.04em;
+  color:var(--dim)}
+.masthead .evcard .evq{margin:0 0 .2rem}
+.masthead .evcard .evnote{color:var(--faint);font-size:.62rem;margin:0 0 .75rem}
+.masthead .evacts{display:flex;gap:.85rem;justify-content:center}
+.masthead .evacts button{background:none;border:0;color:var(--faint);
+  font:inherit;letter-spacing:inherit;cursor:pointer;padding:0 .2rem;line-height:1}
+.masthead .evacts button:hover{color:var(--ink)}
+.masthead .evacts .evok{color:var(--bad)}
+.masthead .evacts button:focus-visible{outline:2px solid var(--info);
+  outline-offset:2px}
+
+/* the layout is deliberately narrow: this is a status wall, not a dashboard */
+.wrap{max-width:1120px;margin:0 auto}
+
+/* ---- section headings: smaller than the masthead, bigger than body --------- */
+h2{
+  font-family:var(--display);font-weight:500;
+  font-size:4.2rem;letter-spacing:.05em;color:var(--dim);
+  margin:2.6rem 0 1rem;padding-bottom:.4rem;border-bottom:1px solid var(--line)}
+h3{font-size:1.1813rem;margin:1.6rem 0 .6rem;color:var(--title);
+  text-transform:uppercase;letter-spacing:.18em;font-weight:500}
+/* Ada 23-Oct-2026 a heading can carry a plain-language aside; it is deliberately
+   not uppercased or tracked out, so it reads as a note rather than a label. */
+h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
+  text-transform:none;font-weight:400}
+
+/* ---- half-circle gauges ------------------------------------------------------
+   Ada 22-Oct-2026 downlink and uplink are RATES, so they are speedometers: a
+   semicircular arc rather than a bar. The arc is a conic-gradient on a square
+   disc, clipped to the top half by the container and hollowed by a concentric
+   background-coloured circle. No SVG, no canvas, no JS geometry. */
+.halves{display:grid;gap:1.5rem 1.4rem;
+  grid-template-columns:repeat(auto-fit,minmax(220px,1fr))}
+.halfg{background:transparent;border:0;border-radius:0;padding:.95rem 0 1.05rem}
+.halfg .head{margin-bottom:.55rem}
+.halfg .k{font-size:1.3125rem;text-transform:uppercase;letter-spacing:.18em;
+  font-weight:500;color:var(--title)}
+.half{position:relative;width:100%;max-width:280px;aspect-ratio:1.48;
+  margin:0 auto;overflow:hidden}
+.half .disc{position:absolute;left:0;top:0;width:100%;aspect-ratio:1/1;
+  border-radius:50%;
+  background:conic-gradient(from var(--arc-from) at 50% 50%,
+    var(--c) 0deg calc(var(--p)*2.17deg),
+    var(--track) calc(var(--p)*2.17deg) var(--arc),
+    transparent var(--arc))}
+/* Hollow the disc with a concentric circle of the page background. The disc is
+   a square of the full width, so its centre sits at 50% of the width and 50% of
+   the disc's own height; the container is 1/1.48 of that, which puts the centre
+   at 74% of the container height and the hollow at 7.4% from the top. */
+.half .hole{position:absolute;left:5%;top:7.4%;width:90%;aspect-ratio:1/1;
+  border-radius:50%;background:var(--bg)}
+.half .val{position:absolute;left:0;right:0;top:74%;transform:translateY(-50%);
+  text-align:center;
+  font-size:1.3125rem;font-weight:600;line-height:1.1;
+  font-variant-numeric:tabular-nums}
+.half .val .u{font-size:0.8531rem;color:var(--faint);margin-left:.2rem}
+.halfg .scale{display:flex;justify-content:space-between;font-size:0.8531rem;
+  color:var(--faint);margin-top:.35rem;font-variant-numeric:tabular-nums}
+.halfg .note{font-size:0.8531rem;color:var(--dim);margin-top:.55rem;
+  font-variant-numeric:tabular-nums}
+
+/* ---- gauges ---------------------------------------------------------------- */
+/* A gauge is a track whose BACKGROUND is painted with the three colour zones,
+   plus a needle marking the live value. The zones are the point: the colour
+   states a range, so a reader sees both where the value is and whether that is
+   inside the acceptable band. */
+/* Ada 22-Oct-2026 gauges are BARS, not tiles: no panel, no border, sitting
+   directly on the page background exactly like harlan's resource rows. The
+   vertical gap widens to carry the separation the panel used to provide. */
+.gauges{display:grid;gap:1.5rem 1.4rem;
+  grid-template-columns:repeat(auto-fit,minmax(300px,1fr))}
+.gauge{background:transparent;border:0;border-radius:0;padding:.95rem 0 1.05rem}
+.gauge .head{display:flex;justify-content:space-between;align-items:baseline;
+  margin-bottom:.55rem;gap:.6rem}
+.gauge .k{font-size:1.3125rem;text-transform:uppercase;letter-spacing:.18em;
+  font-weight:500;color:var(--title)}
+.gauge .v{font-size:1.3125rem;font-weight:600;line-height:1;
+  font-variant-numeric:tabular-nums;white-space:nowrap}
+.gauge .v .u{font-size:0.8531rem;color:var(--faint);margin-left:.2rem}
+.gauge .note{font-size:0.8531rem;color:var(--dim);margin-top:.55rem;
+  font-variant-numeric:tabular-nums}
+
+/* Ada 22-Oct-2026 harlan's bar geometry: 0.4rem tall, fully rounded,
+   translucent slate-400 track, NO border. The three zones are still painted on
+   the track (dimmed) so the acceptable band stays legible, and the needle is
+   slimmed to a tick so it reads at this height. */
+.track{position:relative;height:.4rem;border-radius:9999px;
+  background:var(--track);overflow:visible}
+.zones{position:absolute;inset:0;border-radius:9999px;opacity:.35}
+.needle{position:absolute;top:-3px;width:2px;height:12px;background:var(--ink);
+  border-radius:1px;transform:translateX(-1px);
+  transition:left .35s ease;box-shadow:0 0 0 1px rgba(2,6,23,.7)}
+.scale{display:flex;justify-content:space-between;font-size:0.8531rem;
+  color:var(--faint);margin-top:.35rem;font-variant-numeric:tabular-nums}
+
+.ok{color:var(--ok)} .warn{color:var(--warn)} .bad{color:var(--bad)} .info{color:var(--info)}
+.muted{color:var(--faint)}
+
+/* ---- "Current Throughput" tiles ---------------------------------------------
+   Ada 23-Oct-2026 Matt liked the tile in design/samples (Screenshot ... 5.33.59
+   PM): a label, a big value with its unit, a short sparkline, and the min/max of
+   the window. The sparkline is a tiny inline SVG -- a decoration on a number,
+   not a graph, so it is not a chart panel and gets no stat table. */
+/* Ada 24-Oct-2026 download and upload are SQUARES too (Matt), so the tiles lost
+   their own card shape and joined the box system. The sparkline and min/max
+   stay; the label became the box title and the info circle came along.
+   Ada 24-Oct-2026 margin-bottom: the row below the upload tile was flush against
+   it (0px, measured) because this grid had no bottom margin at all -- Matt asked
+   for more vertical padding after upload.
+   Ada 24-Oct-2026 the .tputs GRID IS GONE (Matt): the throughput box now sits
+   directly inside #dish, so it flows with connection and telemetry. The whole
+   dish grid's margin-bottom supplies the air below the row. */
+.csquare.tbox{display:flex;flex-direction:column}
+/* Ada 24-Oct-2026 download and upload are ONE tile (Matt): the box holds both
+   readings, each with its own label, value, hour-long sparkline and min/max.
+   The two halves are equal rows split by a hairline, so the square fills evenly
+   and the download half sits directly above the upload half. */
+.csquare.tbox .tblocks{flex:1;display:grid;grid-template-rows:1fr 1fr;min-height:0}
+.csquare.tbox .tblock{display:flex;flex-direction:column;justify-content:center;
+  gap:.25rem;min-width:0}
+.csquare.tbox .tblock + .tblock{border-top:1px solid var(--line)}
+.csquare.tbox .tlabel{font-size:0.9625rem;text-transform:uppercase;letter-spacing:.09em;
+  font-weight:500;color:var(--title)}
+.csquare.tbox .tpval{font-size:2.625rem;font-weight:600;line-height:1;
+  font-variant-numeric:tabular-nums}
+.csquare.tbox .tpval .u{font-size:1.3125rem;color:var(--faint);margin-left:.25rem}
+.csquare.tbox .spark{width:100%;height:26px;display:block;
+  background:rgba(255,255,255,.03);border-radius:3px}
+/* Ada 24-Oct-2026 the min/max pair was spread to opposite edges of the 300px box
+   by space-between, so the row's text ran the full 271px content width -- Matt:
+   "data text is too wide". They now sit together at the left with a fixed gap,
+   matching the left-aligned label and value above them. */
+.csquare.tbox .tpstats{display:flex;justify-content:flex-start;gap:1.4rem;
+  font-size:0.8531rem;color:var(--faint);font-variant-numeric:tabular-nums}
+
+/* ---- circular gauges: an arc of 217deg, not a half circle ---------------
+   Ada 23-Oct-2026 Matt measured the samples in design/samples and pointed out
+   the gauges should NOT be exactly a half circle. Measured on
+   samples/Screenshot ... 5.34.36 PM.png: the arc sweeps ~213deg with both ends
+   ~16deg BELOW the horizontal, which matches the original mock's 217.4deg
+   (ends 18.7deg below horizontal). So the arc is 217deg centred on 12 o'clock:
+   from 251.5deg to 108.5deg. The container is taller than a half circle so the
+   dipped ends are visible, and the hollow centre carries the value. */
+:root{
+  /* the arc span in degrees, and where it starts (clockwise from 12 o'clock) */
+  --arc:217deg;
+  --arc-from:251.5deg;
+  /* Ada 24-Oct-2026 every box on the page is this exact square (Matt): the
+     connection list and the latency / power gauges. One size, so the boxes flow
+     instead of each sizing itself to its own content. */
+  --box:300px;
+  /* Ada 24-Oct-2026 the vertical breathing room BETWEEN boxes (Matt). The grids
+     keep a tighter column gap so a row still reads as a group; the air goes
+     top-to-bottom, where the eye travels down the page. */
+  --boxgap:2rem;
+}
+/* ---- dials ----------------------------------------------------------------- */
+/* Dials are arcs for rates that are naturally bounded (percentages, drop rate).
+   Drawn as a conic-gradient on a disc, clipped by the container and hollowed by
+   a concentric circle, so no SVG and no JS geometry. */
+.dials{display:grid;gap:1.1rem;grid-template-columns:repeat(auto-fit,minmax(150px,1fr))}
+/* Ada 22-Oct-2026 dials and facts take harlan's card treatment: the same
+   translucent white wash, the same 6px radius (rounded-md), and no border. */
+/* Ada 23-Oct-2026 the dials are the READING and the facts are the CONTEXT, so
+   the dials took the height the facts gave up. The band stays one unit -- it
+   just spends its height on the thing that carries the information. */
+.dial{background:var(--panel);border:0;border-radius:6px;
+  padding:1.25rem 1rem;text-align:center}
+.dial .ring{
+  --p:0; --c:var(--ok);
+  position:relative;width:148px;aspect-ratio:1.48;
+  margin:0 auto .7rem;overflow:hidden}
+.dial .ring .disc{position:absolute;left:0;top:0;width:100%;aspect-ratio:1/1;
+  border-radius:50%;
+  background:conic-gradient(from var(--arc-from) at 50% 50%,
+    var(--zones,var(--track) 0deg var(--arc)),
+    transparent var(--arc))}
+.dial .ring .hole{position:absolute;left:10%;top:7.4%;width:80%;aspect-ratio:1/1;
+  border-radius:50%;background:var(--panel);border:0}
+.dial .ring span{position:absolute;left:0;right:0;top:74%;transform:translateY(-50%);
+  text-align:center;font-size:2.7125rem;z-index:1;
+  font-variant-numeric:tabular-nums}
+.dial .k{font-size:1.3125rem;text-transform:uppercase;letter-spacing:.18em;
+  font-weight:500;color:var(--title);display:block}
+.dial .note{font-size:0.9625rem;color:var(--dim);display:block;margin-top:.35rem}
+
+/* ---- the connection box -----------------------------------------------------
+   Ada 23-Oct-2026 the connection data is a set of SQUARES, not a row of cards
+   beside a row of rings: the reader asks "is it working" and gets square
+   objects. The four facts share one square in a 2x2 grid; packet loss is the
+   other. Squares read as units, and the descriptions are gone because the label
+   plus the value already say it -- the note was repeating the label.
+   Ada 24-Oct-2026 the packet-loss gauge box was removed (Matt), leaving ONE
+   square that carries the whole list. */
+/* Ada 24-Oct-2026 the packet-loss gauge box is gone, so this row is ONE square.
+   It sizes itself to its content (width:max-content) and stays square, so the
+   rows are as tight as the gap value allows instead of being spread across a
+   box that is wider than the list needs. */
+.csquares{display:grid;gap:1rem;row-gap:var(--boxgap);max-width:960px;
+  /* Ada 24-Oct-2026 the air BETWEEN box groups matches the air inside a group
+     (Matt). Without this the three-square row sat flush against the throughput
+     row below it -- 0px, the boxes touched. */
+  margin-bottom:var(--boxgap);
+  grid-template-columns:minmax(0,1fr)}
+.csquare{position:relative;background:var(--panel);border:0;border-radius:6px;
+  aspect-ratio:1/1;width:var(--box);padding:.9rem;display:grid;
+  grid-template-columns:repeat(2,minmax(0,1fr));
+  grid-template-rows:repeat(2,minmax(0,1fr));gap:.5rem}
+/* Ada 23-Oct-2026 the list square: a vertical list of label/value rows rather
+   than a 2x2 grid, so a long value like the firmware string never has to be
+   squeezed into a half-width cell. Each row is a flex line -- label left,
+   value right -- and the grid rows are equal, which keeps the square's shape.
+   `.r` spans the full width, `.c` is one of the two half-width cells. */
+/* Ada 24-Oct-2026 the rows were 82px tall with the text centred inside them, so
+   every label carried a blank band above and below. The row now hugs its text,
+   and the box hugs the rows -- so the space BETWEEN rows is the only air left.
+   */
+/* Ada 24-Oct-2026 the list's content starts at the top of the square (Matt: "take
+   out the extra line at the top"), so its title lines up with the gauge boxes'
+   titles instead of being centred and starting a line lower. */
+.csquare.list{grid-template-columns:1fr;grid-template-rows:auto repeat(6,auto);
+  gap:.3rem;align-content:start}
+/* Ada 24-Oct-2026 the connection list has five rows now that Software became
+   Firmware in telemetry. The base rule above keeps six rows because telemetry
+   and usage have six; this just gives the connection box its own count. Note
+   the rows are still `auto` with `align-content:start`, so the box keeps the
+   foot gap that design has always had -- only the row COUNT is different. */
+/* Ada 24-Oct-2026 the firmware-update indicator (Matt): the dot beside the
+   version IS the link -- it opens the model's firmware download page. Green means
+   the router is on the current firmware, amber means GL.iNet has a newer one. */
+.csquare .r .v a.fwdot{display:inline-block;flex:0 0 auto;text-decoration:none}
+/* Ada 24-Oct-2026 the dot sits at the END of the row (Matt), so its margin is on
+   the left instead of the right. */
+.csquare .r .v a.fwdot.end .led{margin-left:.4rem;margin-right:0}
+.csquare.list.rows5{grid-template-rows:auto repeat(5,auto)}
+.csquare.list.rows3{grid-template-rows:auto repeat(3,auto)}
+.csquare.list.rows4{grid-template-rows:auto repeat(4,auto)}
+/* Ada 24-Oct-2026 the resources box gained Firmware and Update (Matt), taking it
+   from five rows to seven. */
+.csquare.list.rows7{grid-template-rows:auto repeat(7,auto)}
+/* Ada 26-Oct-2026 usage box: the projection rows grew it past the square,
+   so text + row spacing shrink to fit all rows in the 300px panel. */
+.csquare.usage .btitle{font-size:1.05rem}
+/* Ada 06-Nov-2026 the usage tile's level bars: one thin bar per service, a fill that carries
+   the band colour, tick marks at the thresholds that matter (warn, allowance/bank ceiling), and
+   a neutral grey when the tile has no attributable reading to draw. */
+.csquare.usage .lvl{display:inline-block;width:7.2rem;height:.5rem;border-radius:.25rem;
+  background:rgba(255,255,255,.14);position:relative;overflow:hidden;vertical-align:middle}
+.csquare.usage .lvl .fill{position:absolute;left:0;top:0;bottom:0;border-radius:.25rem;
+  background:var(--ok)}
+.csquare.usage .lvl.warn .fill{background:var(--warn)}
+.csquare.usage .lvl.bad .fill{background:var(--bad)}
+.csquare.usage .lvl.idle .fill{background:rgba(255,255,255,.18)}
+.csquare.usage .lvl .tk{position:absolute;top:-1px;bottom:-1px;width:1px;
+  background:rgba(255,255,255,.5)}
+.csquare.usage .r .k{font-size:0.8rem}
+.csquare.usage .r .v{font-size:0.85rem}
+.csquare.usage .r .v.big{font-size:1.05rem;margin-right:0}
+.csquare.usage .r{gap:.25rem}
+.csquare.usage{grid-template-rows:auto repeat(9,auto);gap:.18rem}
+.csquare .r{display:flex;align-items:baseline;justify-content:space-between;
+  gap:.6rem;min-width:0;padding:.06rem .5rem}
+/* Ada 23-Oct-2026 the LABEL can shrink and wrap. A long label
+   ("Signal To Noise Ratio", now abbreviated SNR) pushes the value out of a
+   narrow square; letting it wrap keeps the row intact and the square grows
+   a little taller rather than losing the reading. */
+.csquare .r .k{font-size:0.9625rem;text-transform:uppercase;letter-spacing:.09em;
+  font-weight:500;color:var(--title);flex:0 1 auto;min-width:0;overflow-wrap:anywhere}
+.csquare .r .v{font-size:1.085rem;font-weight:600;font-variant-numeric:tabular-nums;
+  text-align:right;min-width:0;overflow-wrap:anywhere}
+.csquare .r .v.small{font-size:0.7rem;line-height:1.35}
+/* Ada 24-Oct-2026 the failover values stack (Matt): the state word drops to a
+   second line in smaller text. `.col` is the value's class; `.b` is the second
+   line. */
+.csquare .r .v.col{display:flex;flex-direction:column;align-items:flex-end;gap:.1rem}
+.csquare .r .v.col .b{font-size:0.7rem}
+/* Ada 24-Oct-2026 the alerts count is the one number worth scanning for, so it
+   is 25% larger than its siblings: 1.085rem x 1.25 = 1.35625rem. The .4rem
+   right margin is not padding: the two rows above end in a status light whose
+   own .4rem margin pulls it .4rem in from the value column's right edge, so
+   without this the bigger number would hang .4rem further right than them. */
+.csquare .r .v.big{font-size:1.35625rem;margin-right:.4rem}
+.csquare .r .v .led{margin-right:.4rem}
+/* Ada 23-Oct-2026 the software row is STACKED, matching Matt's sketch: the
+   label on its own line and the firmware string indented beneath it. The string
+   is too long to sit beside its label at any width, so it gets the row to
+   itself rather than wrapping mid-version-number. */
+.csquare .r.stack{flex-direction:column;align-items:flex-start;gap:.15rem}
+.csquare .r.stack .v{padding-left:1.1rem;text-align:left}
+/* Ada 23-Oct-2026 the SNR light. The dish reports no numeric SNR, but it does
+   report whether the signal clears its own noise floor -- that is the one
+   health signal that exists, and a light is the right shape for it: no number
+   to read, just red or green. Null (the dish did not report) stays dim rather
+   than claiming red, because an absent measurement is not a measurement. */
+.csquare .led{display:inline-block;width:13px;height:13px;border-radius:50%;
+  background:var(--faint);opacity:.55;flex:none;vertical-align:baseline}
+.csquare .led.ok{background:var(--ok);opacity:1;box-shadow:0 0 9px var(--ok)}
+.csquare .led.bad{background:var(--bad);opacity:1;box-shadow:0 0 9px var(--bad)}
+.csquare .led.warn{background:var(--warn);opacity:1;box-shadow:0 0 9px var(--warn)}
+.csquare .citem{display:flex;flex-direction:column;justify-content:center;
+  min-width:0;padding:.3rem .45rem}
+.csquare .citem .k{font-size:0.9625rem;text-transform:uppercase;letter-spacing:.16em;
+  font-weight:500;color:var(--title);display:block;margin-bottom:.18rem}
+.csquare .citem .v{font-size:1.085rem;font-weight:600;font-variant-numeric:tabular-nums}
+/* Ada 23-Oct-2026 the firmware string is long, so it gets its own size and is
+   allowed to wrap rather than overflow the cell. */
+.csquare .citem .v.small{font-size:0.7rem;line-height:1.35;
+  overflow-wrap:anywhere}
+
+/* Ada 24-Oct-2026 ALL SIX boxes under Starlink EvilDish now wrap together
+   (Matt: "all six boxes under starlink evildish should wrap"). They are one grid
+   -- `.csquares.dishgrid` -- whose grid items are the boxes inside `#dish`
+   (connection, telemetry, throughput, usage) and inside `#skyboxes` (sky map,
+   obstructions). `#dish` and `#skyboxes` are `display:contents` so their children
+   become grid items of the wrapper instead of being locked into two separate
+   grids that reflow independently.
+   `#skyboxes` stays a separate node from `#dish` on purpose: load() re-renders
+   `#dish` every 15s, and display:contents lets it do that without touching the
+   map <img> or its listeners.
+   The `<h2>` inside #dish is a grid item too, so it spans every column. */
+.csquares.dishgrid{grid-template-columns:repeat(auto-fit,minmax(var(--box),var(--box)));
+  justify-content:center;gap:1rem;row-gap:var(--boxgap);max-width:932px;margin:0 auto;
+  margin-bottom:var(--boxgap)}
+#dish,#skyboxes{display:contents}
+/* NOTE the descendant selectors, not `>`: display:contents changes LAYOUT, not
+   the DOM, so the h2's parent is still #dish and #obmap-note's is #skyboxes. */
+.csquares.dishgrid h2{grid-column:1/-1;margin-bottom:0}
+.csquares.dishgrid #obmap-note{grid-column:1/-1}
+.csquare.gbox{grid-template-columns:1fr;
+  grid-template-rows:auto minmax(0,1fr) auto;align-content:stretch}
+/* Ada 24-Oct-2026 the gauge's note is pinned to the box's bottom row (Matt): the
+   live values sit at the foot of the square, and their explanation lives in the
+   info tip instead. */
+.csquare.gbox .bnote{font-size:0.8531rem;color:var(--dim);
+  font-variant-numeric:tabular-nums}
+/* Ada 24-Oct-2026 each box carries its own title (Matt) -- the section h3s for
+   connection and performance are gone, so the box is the only place the unit is
+   named. In a gauge box the metric's own label would just repeat the title, so
+   it is hidden and the value sits on the right on its own. */
+.csquare .btitle{font-size:1.2rem;font-weight:700;line-height:1.1;
+  text-transform:uppercase;letter-spacing:.18em;color:var(--title);
+  margin-bottom:.3rem}
+.csquare.gbox .gauge .head{justify-content:flex-end}
+.csquare.gbox .gauge .head .k{display:none}
+
+/* Ada 24-Oct-2026 info circles (Matt): a small (i) in the upper-left corner of
+   each box, with the metric description on hover or keyboard focus. Pure CSS --
+   the tip is absolutely positioned, so it never disturbs the square, its rows,
+   or the neighbouring box. */
+.csquare .info{position:absolute;top:.5rem;right:.5rem;left:auto;width:20px;height:20px;
+  border-radius:50%;background:#64748b;color:#f8fafc;
+  border:1px solid #94a3b8;
+  font-family:var(--font);font-size:.68rem;line-height:18px;text-align:center;
+  font-style:italic;cursor:help;user-select:none;z-index:5}
+.csquare .info:focus{outline:2px solid #38bdf8;outline-offset:1px}
+/* Ada 24-Oct-2026 the tip is anchored to the RIGHT edge of the circle now (Matt
+   moved the circles to the upper-right corner), so it opens leftward and stays
+   inside the square. */
+.csquare .tip{position:absolute;top:1.5rem;right:0;left:auto;
+  width:calc(var(--box) - 1.1rem);display:none;padding:.7rem .8rem;
+  border-radius:6px;background:#020617;border:1px solid rgba(148,163,184,.28);
+  box-shadow:0 8px 22px rgba(2,6,23,.6);font-family:var(--font);
+  font-size:.8rem;line-height:1.5;color:var(--ink);z-index:10;text-align:left}
+.csquare .tip p{margin:0 0 .55rem}
+.csquare .tip p:last-child{margin:0}
+.csquare .tip b{color:var(--title);font-weight:600}
+/* Ada 24-Oct-2026 the tips are a TOGGLE now (Matt): on an iPhone a tap focuses
+   the (i) and nothing ever blurs it, so the old hover/focus behaviour left the
+   tip stuck open. Tap the (i) to open it, tap it again -- or anywhere else -- to
+   close it. Hover still works under a mouse; Enter/Space toggles by keyboard. */
+.csquare .info:hover .tip,.csquare .info.open .tip{display:block}
+.csquare.gbox .gauge{padding:0;height:100%;display:flex;flex-direction:column;
+  justify-content:space-between}
+
+/* ---- text / time elements -------------------------------------------------- */
+/* Things that are not levels -- identity, software, and clocks. Uptime is a
+   TIME ELEMENT (days / hours / minutes), never a gauge: a clock is not a
+   quantity with an acceptable band. */
+/* Ada 24-Oct-2026 the .facts / .fact cards are GONE: the router section now uses
+   the same --box squares as the dish (Matt), so nothing on the page renders a
+   .fact any more. Do not re-add them without re-adding the CSS. */
+
+/* ---- tables ---------------------------------------------------------------- */
+table{width:100%;border-collapse:collapse;font-size:0.8531rem;
+  /* Ada 23-Oct-2026 fixed layout so a wide row cannot push the page sideways:
+     after the 1.75x type scale a five-column stat table is wider than a phone
+     viewport, and the cells wrap inside their column instead. */
+  table-layout:fixed;
+  background:var(--panel);border:0;border-radius:6px;overflow:hidden}
+th,td{text-align:left;padding:.42rem .7rem;border-bottom:1px solid var(--line);
+  overflow-wrap:anywhere}
+th{color:var(--title);font-weight:500;font-size:0.9625rem;text-transform:uppercase;
+  letter-spacing:.18em;background:var(--panel-hi)}
+td.v{font-variant-numeric:tabular-nums}
+tr:last-child td{border-bottom:none}
+tr.off td{color:var(--faint)}
+
+.stale{display:inline-block;font-size:0.8531rem;padding:.12rem .45rem;border-radius:4px;
+  background:rgba(251,191,36,.14);color:var(--warn);border:0;
+  vertical-align:middle;font-family:var(--font)}
+/* Ada 27-Oct-2026 stale > 10 min gets red to flag a real outage (Matt). */
+.stale-red{background:rgba(251,113,133,.14);color:var(--bad)}
+
+footer{margin-top:3rem;padding-top:1rem;border-top:1px solid var(--line);
+  color:var(--faint);font-size:0.8531rem;display:flex;justify-content:space-between;
+  gap:1rem;flex-wrap:wrap}
+
+/* Ada 24-Oct-2026 the two WIDE boxes are GONE (Matt removed the sky view
+   section): the obstruction trend and its table are now a normal .chart panel at
+   the top of the history section, and the two sky boxes live under the dish
+   section. `.skywide` and `.csquare.widebox` were deleted with them -- grep for
+   them before assuming they exist. */
+
+/* Ada 24-Oct-2026 the Delilah router section uses the SAME box system as the dish
+   (Matt): --box squares that flow on their own, each with a title and an info
+   circle. Declared above the media queries on purpose -- a base rule after a
+   media query of equal specificity wins, which silently undid the stacking
+   rules (the same trap as .csquares.row3 setting its own gap). */
+.routerwrap{display:grid;gap:1rem;row-gap:var(--boxgap);justify-content:center;
+  grid-template-columns:repeat(auto-fit,minmax(var(--box),var(--box)));
+  max-width:932px;margin:0 auto}
+/* Ada 24-Oct-2026 .skywrap is GONE -- the two sky boxes are direct children of
+   #skyboxes and wrap with the rest of the dish grid (see .csquares.dishgrid). */
+
+/* ---- responsive ------------------------------------------------------------
+   Ada 22-Oct-2026 the grids are auto-fit/minmax so they already reflow, but
+   they cannot change type size, spacing or density. harlan's own breakpoints
+   are 1040px and 1536px (its custom.css); a phone tier is added below them
+   because this page is read on a phone. */
+@media (max-width:640px){
+  body{padding:1rem .6rem 2.5rem}
+  .wrap{max-width:none}
+  .masthead{margin-bottom:1.1rem}
+  /* Ada 24-Oct-2026 three 300px squares cannot fit a phone; they stack. */
+  .csquares{grid-template-columns:1fr}
+  .csquares.dishgrid{grid-template-columns:var(--box)}
+  /* Ada 24-Oct-2026 the router boxes stack one per row on a phone too. */
+  .routerwrap{grid-template-columns:var(--box)}
+  /* Ada 24-Oct-2026 the masthead title scales with clamp() in the base rule now,
+     so "rocco van" fits a phone without an override here. */
+  .masthead .sub{font-size:1.4875rem}
+  /* Three gauges across, as on the desktop view. The desktop type above is
+     harlan's scale and does not fit three-up, so the phone tier drops to a
+     compact scale and lets the label wrap rather than overflow. */
+  .gauges{grid-template-columns:repeat(3,minmax(0,1fr));gap:.7rem .5rem}
+  .gauge{padding:.35rem 0 .5rem}
+  .gauge .k{font-size:0.875rem;letter-spacing:.08em;line-height:1.25}
+  .gauge .v{font-size:1.085rem}
+  .gauge .v .u{font-size:0.875rem}
+  .gauge .note{font-size:0.875rem;margin-top:.3rem}
+  .scale{font-size:0.875rem;margin-top:.2rem}
+  .halves{grid-template-columns:repeat(2,minmax(0,1fr));gap:.9rem .5rem}
+  .half{max-width:100%}
+  .half .val{font-size:1.26rem}
+  .half .val .u{font-size:0.9625rem}
+  .halfg{padding:.35rem 0 .5rem}
+  .halfg .k{font-size:0.9625rem;letter-spacing:.1em}
+  .dials{grid-template-columns:repeat(3,minmax(0,1fr));gap:.5rem}
+  .dial{padding:.6rem .4rem}
+  /* the ring shrinks on phones, so its value text must shrink with it or it
+     spills over the arc. 88px, not 64: the dials are the reading, so they keep
+     as much size as a three-up phone row allows. */
+  .dial .ring{width:88px;height:88px}
+  .dial .ring::after{inset:10px}
+  .dial .ring span{font-size:1.575rem}
+  .dial .k{font-size:0.9625rem;letter-spacing:.08em}
+  .dial .note{font-size:0.875rem}
+  .facts{grid-template-columns:repeat(2,minmax(0,1fr));gap:.5rem}
+  .fact{padding:.5rem .55rem}
+  .fact .k{font-size:0.875rem;letter-spacing:.08em}
+  .fact .v{font-size:1.085rem}
+  .fact .note{font-size:0.875rem}
+  h2{font-size:2.45rem;margin:1.6rem 0 .7rem}
+  h3{font-size:0.9625rem;margin:1.1rem 0 .45rem}
+  table{font-size:0.9625rem}
+  th{font-size:0.875rem}
+  footer{flex-direction:column;gap:.35rem;font-size:0.9625rem}
+}
+@media (min-width:641px) and (max-width:1039px){
+  .gauges{grid-template-columns:repeat(auto-fit,minmax(280px,1fr))}
+  .dials{grid-template-columns:repeat(auto-fit,minmax(140px,1fr))}
+  /* Ada 24-Oct-2026 three 300px squares are 932px; at 768px viewport the row
+     drops to two so nothing overflows. The dish's six boxes follow the same
+     rule -- they are one grid now (.csquares.dishgrid). */
+  .csquares.dishgrid{grid-template-columns:repeat(2,var(--box))}
+  /* Ada 24-Oct-2026 the router boxes drop to two-up at this tier. */
+  .routerwrap{grid-template-columns:repeat(2,var(--box))}
+}
+@media (min-width:1536px){
+  .wrap{max-width:1280px}
+}
+
+/* ---- history charts ---------------------------------------------------------
+   Ada 23-Oct-2026 each panel takes harlan's card treatment (translucent white
+   wash, no border, 6px radius). uPlot draws its axes and grid on canvas, so
+   the colours those need live in the chart options in JS -- only the DOM
+   chrome is restyled here. */
+.chart{margin:0 0 1.4rem}
+.chart h3{margin:0 0 .6rem;display:flex;justify-content:space-between;
+  align-items:baseline;gap:.6rem}
+.chart h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
+  text-transform:none;font-weight:400}
+.plot{background:var(--panel);border:0;border-radius:6px;
+  padding:.8rem .8rem .4rem;overflow:hidden}
+.plot .uplot{width:100%;font-family:var(--font)}
+.u-title{display:none}                       /* the h3 already titles the panel */
+.u-legend{background:transparent;border:0;font-size:1.05rem;margin:0 0 .25rem;
+  text-align:left}
+.u-legend th,.u-legend td{color:var(--faint);border:0;padding:0 .5rem 0 0;
+  font-size:1.05rem;text-transform:uppercase;letter-spacing:.1em;font-weight:400}
+.u-legend td.u-value{color:var(--ink);font-variant-numeric:tabular-nums;
+  text-transform:none;letter-spacing:0}
+.u-legend .u-marker{width:.6rem;height:.6rem;border-radius:1px}
+.u-select{background:rgba(148,163,184,.10)}
+.u-hz .u-cursor-x,.u-vt .u-cursor-y{border-color:rgba(148,163,184,.45)}
+.u-hz .u-cursor-y,.u-vt .u-cursor-x{border-color:rgba(148,163,184,.45)}
+
+/* stat table under each chart: one row per series, min / max / avg / current */
+table.stats{margin-top:.7rem}
+table.stats thead th{background:var(--panel-hi)}
+/* Ada 24-Oct-2026 the label column gets 40%: with table-layout:fixed the widths
+   come from the header row, so this is what stops a metric name ("obstruction")
+   wrapping in a narrow box -- it made the sky stats box 312px tall at 768px. */
+table.stats thead th:first-child{width:40%}
+table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
+  text-align:left}
+/* Ada 24-Oct-2026 the #skystats overrides are GONE: the obstruction table is now
+   an ordinary stat table inside a .chart panel, exactly like the other three, so
+   the generic `table.stats` rules are all it needs. */
+@media (max-width:640px){
+  .plot{padding:.5rem .4rem .25rem}
+  .chart h3 .hint{display:none}
+  /* Ada 24-Oct-2026 the stat tables' values wrapped in their columns on a phone
+     (Matt): the fixed 40% label column left 53px value columns that could not
+     hold "0.0 MB/s" or "100.00 %". On a phone the columns now size to their own
+     content at a smaller size, and the panel scrolls sideways rather than
+     wrapping if a row is still too wide. */
+  .chart{overflow-x:auto}
+  table.stats{font-size:0.6875rem;table-layout:auto}
+  table.stats th{font-size:0.6875rem;letter-spacing:0}
+  table.stats th,table.stats td{padding:.22rem .3rem;white-space:nowrap}
+  table.stats thead th:first-child{width:auto}
+}
+
+/* ---- the "why" act: map, its stats, and the trend --------------------------
+   Ada 23-Oct-2026 the dish reports a 123x123 grid of signal quality per
+   direction (0 = obstructed, 1 = clear, -1 = no data). serve-data.py renders
+   it as a PNG, coloured with the page's own zone colours: rose for obstructed,
+   emerald for clear, and genuinely TRANSPARENT for "no data" -- filling that
+   in would make the dish's blind spots read as obstructions.
+   The map sits beside its obstruction stats, with the obstruction trend under
+   both: the map says WHERE, the stats say HOW MUCH, the trend says HOW OFTEN. */
+/* Ada 24-Oct-2026 the sky view is standard square boxes that flow (Matt): the
+   map, the three obstruction stats, and the trend are all --box squares in one
+   grid. Each carries an info circle; the descriptive text that used to sit under
+   each element moved into that tip. The mapbox keeps its horizon ring and
+   compass, now sized to the square rather than to a fixed 260px. */
+/* Ada 24-Oct-2026 the sky boxes are direct children of #skyboxes (no .skywrap
+   wrapper any more) and wrap with the rest of the dish grid -- see
+   `.csquares.dishgrid` for how. */
+.csquare.skybox{grid-template-columns:1fr;grid-template-rows:auto minmax(0,1fr);
+  align-content:stretch}
+.csquare.skybox .mapbox{position:relative;height:100%;aspect-ratio:1/1;
+  justify-self:center;background:transparent;border:0;overflow:hidden}
+.csquare.skybox .mapbox img{position:absolute;inset:0;width:100%;height:100%;
+  object-fit:cover;image-rendering:pixelated}
+.csquare.skybox .mapbox .horizon{position:absolute;inset:0;border-radius:50%;
+  border:1px solid var(--line);pointer-events:none}
+.csquare.skybox .mapbox .compass{position:absolute;top:.35rem;left:.55rem;z-index:1;
+  font-size:.9625rem;letter-spacing:.18em;color:var(--faint)}
+/* Ada 24-Oct-2026 the obstruction stats are ONE list box (Matt), like the
+   connection list: title + info circle + label/value rows. */
+.csquare.olist{grid-template-columns:1fr;grid-template-rows:auto repeat(3,auto);
+  gap:.3rem;align-content:start}
+.csquare.skybox .skyval{font-size:2.625rem;font-weight:600;line-height:1;
+  align-self:center;font-variant-numeric:tabular-nums}
+.csquare.skybox .skyval .u{font-size:1.3125rem;color:var(--faint);margin-left:.2rem}
+#obmap-note{font-size:1.05rem;margin-top:.6rem}
+/* Ada 06-Nov-2026 the page's own commit, very small at the bottom (Matt): which build is this?
+   Deliberately quiet - it is a reference, not information the page is trying to tell you. */
+.pagever{font-size:.6rem;line-height:1.2;opacity:.4;text-align:center;letter-spacing:.08em;
+  padding:.5rem 0 1.1rem;font-variant-numeric:tabular-nums;user-select:text}
+.pagever:empty{display:none}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <!-- Ada 06-Nov-2026 the history charts on their own page (Matt). The chart code is the same
+       code the main page used, moved here whole; only the shell is new. The main page links
+       here and no longer draws them. -->
+  <h1>rocco van &mdash; history</h1>
+  <p class="muted"><a href="index.html">&larr; back to the van page</a></p>
+  <div id="history"></div>
+  <footer>
+    <span>polled every 60s &middot; data from <code>/srv/van/data</code></span>
+    <span><a href="https://harlan.cinnamon-pinecone.ts.net:8888/">&larr; harlan dashboard</a></span>
+  </footer>
+</div>
+
+<script src="assets/uplot/uPlot.iife.min.js"></script>
+<script>
+// ---- helpers (the same two the main page defines) ---------------------------
+const $ = (id) => document.getElementById((id && id.startsWith('#')) ? id.slice(1) : id);
+const esc = (s) => String(s == null ? "" : s)
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
+function orDash(s) { const t = String(s == null ? "" : s).trim(); return t ? esc(t) : "&mdash;"; }
+function fmtInt(n) { return (n == null || isNaN(n)) ? "&mdash;" : Math.round(n).toLocaleString("en-US"); }
+function num(v) { if (v == null || v === "") return null; const n = typeof v === "number" ? v : parseFloat(String(v).replace(/,/g, "")); return isNaN(n) ? null : n; }
+
+// ---- history charts ---------------------------------------------------------
+// Ada 23-Oct-2026 the poller keeps one row per tick in /srv/van/data/van.db and
+// serve-data.py serves it as /history; these panels draw that history.
+//
+// SNR is deliberately absent: status_data() on this dish returns
+// is_snr_above_noise_floor but snr = null (checked against a live dump), so
+// there is no numeric SNR series to plot.
+const HISTORY_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/history";
+// Ada 24-Oct-2026 usage over the billing period (Matt).
+const USAGE_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/usage";
+// Ada 06-Nov-2026 the page's own commit (Matt). serve-data.py reads it from the page's working
+// tree, so it is never stale: the commit that changes this line is the one it reports.
+const VERSION_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/version";
+async function loadVersion() {
+  const el = $("pagever");
+  if (!el) return;
+  try {
+    const r = await fetch(VERSION_URL + "?t=" + Date.now(), { cache: "no-store" });
+    const v = await r.json();
+    if (!r.ok || v.error) throw new Error(v.error || ("HTTP " + r.status));
+    el.textContent = v.commit;
+    el.title = (v.branch ? v.branch + " @ " : "") + v.full;
+  } catch (e) {
+    el.textContent = "";          // decoration: a missing commit must not look like a fault
+  }
+}
+const HISTORY_HOURS = 16;
+
+// Ada 23-Oct-2026 150px was not enough for the throughput chart's axis. uPlot
+// chooses its y-axis increment from the PIXEL SPACE available, and a range that
+// crosses zero at ~83px of plot height collapses to a single tick at 0 -- the
+// axis rendered, but with no scale on it. Measured on the live page: 150px
+// gives 1 tick, 180px gives 3, 200px gives 5. 200px is the smallest height
+// that resolves the bidirectional axis, and it helps the other panels too.
+const CHART_H = 200;
+/* Ada 24-Oct-2026 SKY_CHART_H is gone -- the sky trend now lives in a normal
+   .chart panel like the rest, so it uses CHART_H too. */
+
+const AXIS_FONT = '17.5px "Plex Mono",ui-monospace,Menlo,Consolas,monospace';
+// uPlot draws its axes on canvas, so their colours are options, not CSS.
+const axis = (extra) => Object.assign({
+  stroke: "rgba(226,232,240,.85)",
+  grid: { stroke: "rgba(148,163,184,.14)", width: 1 },
+  ticks: { stroke: "rgba(148,163,184,.30)", width: 1 },
+  font: AXIS_FONT,
+  labelFont: AXIS_FONT,
+}, extra || {});
+
+const statsOf = (vals) => {
+  let min = Infinity, max = -Infinity, sum = 0, n = 0, cur = null;
+  for (const v of vals) {
+    if (v == null || isNaN(v)) continue;
+    if (v < min) min = v;
+    if (v > max) max = v;
+    sum += v; n++;
+    cur = v;
+  }
+  return n ? { min: min, max: max, avg: sum / n, current: cur } : null;
+};
+
+// One row per series, min / max / avg / current -- the same shape as the stat
+// tables under the reference dashboard's charts.
+// ---- alerts: 24h retention + shared dismissal (Ada 02-Nov-2026, Matt) --------
+// Deliberately OUTSIDE the `// ---- helpers` slice that tests/events.test.mjs
+// evals: this region touches the network and the DOM at top level, and the
+// helper slice has to stay free of side effects.
+const DISMISSED_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismissed";
+const DISMISS_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismiss";
+const DISMISS_ALL_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/dismiss_all";
+
+// age(ts, now) moved here from inside load() so the alert renderer can run from
+// a dismissal as well as from a tick. Body unchanged, 200-second threshold
+// included.
+function age(ts, now) {
+  if (!ts) return "&mdash;";
+  const s = Math.round(now - ts);
+  const h = Math.floor(s / 3600);
+  const m = Math.floor((s % 3600) / 60);
+  const sec = s % 60;
+  const w = (n, word) => n === 1 ? word : word + "s";
+  if (h > 0) return h + " " + w(h, "hour") + " " + m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+  if (s >= 200) return m + " " + w(m, "minute") + " " + sec + " " + w(sec, "second");
+  return s + " " + w(s, "second");
+}
+
+let dismissedIds = {};      // ids the server has confirmed closed
+let dismissedPending = {};  // ids hidden optimistically, not yet confirmed
+let lastSnap = {};          // the newest snapshot, so a dismissal can repaint now
+
+async function loadDismissed() {
+  try {
+    const r = await fetch(DISMISSED_URL);
+    const j = await r.json();
+    dismissedIds = (j && j.ids) || {};
+    // An id stays pending (hidden) until the server's list actually contains it,
+    // so a slow or failed POST cannot make a just-closed alert reappear.
+    const keep = {};
+    for (const id in dismissedPending) {
+      if (!Object.prototype.hasOwnProperty.call(dismissedIds, id)) keep[id] = dismissedPending[id];
+    }
+    dismissedPending = keep;
+  } catch (e) { /* keep the last known dismissals; the next tick retries */ }
+}
+
+// Ada 02-Nov-2026 a refused write must be visible, not swallowed: the design
+// requires the store's failure to be loud, and an un-awaited POST means the row
+// would otherwise sit hidden until a reload and then quietly reappear. Returning
+// false makes the caller un-hide the rows and say so.
+async function postDismiss(url, body, ids) {
+  let ok = false;
+  try {
+    const r = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body)
+    });
+    const j = await r.json();
+    if (r.ok && j && j.ids) { dismissedIds = j.ids; ok = true; }
+  } catch (e) { /* network failure -- handled the same way as a refusal */ }
+  if (!ok) {
+    (ids || []).forEach(function (id) { delete dismissedPending[id]; });
+    renderEvents(lastSnap, Date.now() / 1000);   // the rows come back, honestly
+    const bar = $("evbar");
+    if (bar) bar.innerHTML += ' <span class="everr">could not save that dismissal</span>';
+  }
+}
+
+function dismissOne(id) {
+  if (!id) return;
+  const t = Date.now() / 1000;
+  dismissedPending[id] = t;
+  renderEvents(lastSnap, t);
+  postDismiss(DISMISS_URL, { id: id }, [id]);
+}
+
+// The ids the open dialog promised to dismiss, frozen when it opened so the
+// number it shows is exactly what confirming takes: a tick landing while the
+// dialog is up must not quietly change the answer.
+var closeAllPending = null;
+
+function dismissAll(ids) {
+  ids = ids || [];
+  if (!ids.length) return;
+  const t = Date.now() / 1000;
+  ids.forEach(function (id) { dismissedPending[id] = t; });
+  renderEvents(lastSnap, t);
+  postDismiss(DISMISS_ALL_URL, { ids: ids }, ids);
+}
+
+// Ada 02-Nov-2026 "close all" asks first (Matt).
+function openCloseAll() {
+  const dlg = $("evdlg"), txt = $("evdlgtxt");
+  if (!dlg || !txt) return;
+  const ids = [];
+  document.querySelectorAll("#events .evrow").forEach(function (n) {
+    const id = n.getAttribute("data-id");
+    if (id) ids.push(id);
+  });
+  if (!ids.length) return;
+  closeAllPending = ids;
+  txt.textContent = closeAllPrompt(ids.length);
+  dlg.setAttribute("data-open", "1");
+  const cancel = $("evdlgcancel");
+  if (cancel) cancel.focus();   // the safe answer is the one that holds focus
+}
+
+function closeCloseAll(restoreFocus) {
+  const dlg = $("evdlg");
+  if (!dlg) return;
+  dlg.removeAttribute("data-open");
+  closeAllPending = null;
+  if (restoreFocus) {
+    // Still there only because nothing was dismissed. On a confirm the control
+    // is gone (the list is empty, so renderEvents clears the bar), and focus
+    // falls back to the document rather than to a detached button.
+    const b = $("evcloseall");
+    if (b) b.focus();
+  }
+}
+
+function confirmCloseAll() {
+  const ids = closeAllPending || [];
+  closeCloseAll(false);
+  dismissAll(ids);
+}
+
+// Delegated on document: #events and #evbar are re-rendered on every tick, so
+// per-row listeners would be discarded (same reason the info-circle tips
+// delegate).
+document.addEventListener("click", function (e) {
+  const t = e.target;
+  if (!t || !t.closest) return;
+  const x = t.closest(".evx");
+  if (x) { dismissOne(x.getAttribute("data-id")); return; }
+  if (t.closest("#evcloseall")) { openCloseAll(); return; }
+  if (t.closest("#evdlgok")) { confirmCloseAll(); return; }
+  if (t.closest("#evdlgcancel")) { closeCloseAll(true); return; }
+  // the backdrop itself, not the card: a click on the card's padding does nothing
+  if (t.id === "evdlg") closeCloseAll(true);
+});
+
+// Escape cancels, the way every other dialog on the platform behaves.
+document.addEventListener("keydown", function (e) {
+  if (e.key !== "Escape") return;
+  const dlg = $("evdlg");
+  if (dlg && dlg.getAttribute("data-open") === "1") closeCloseAll(true);
+});
+
+// Paints the close-all bar and the alert rows. Renders at most
+// EVENT_DISPLAY_MAX rows and says so when there are more, because 80 alerts in
+// a day means something is flapping (Matt).
+function renderEvents(snap, now) {
+  const ev = $("events");
+  if (!ev) return;
+  const bar = $("evbar");
+  const vis = visibleEvents((snap && snap.events) || [], now, dismissedIds, dismissedPending);
+  if (!vis.list.length) {
+    ev.style.display = "none";
+    ev.innerHTML = "";
+    if (bar) bar.innerHTML = "";
+    return;
+  }
+  ev.style.display = "";
+  if (bar) {
+    bar.innerHTML = '<button type="button" id="evcloseall"'
+                  + ' title="dismiss every alert shown">close all</button>';
+  }
+  let html = vis.list.map(function (e) {
+    const id = esc(eventId(e));
+    return '<div class="evrow" data-id="' + id + '">'
+         + '<span class="evtxt">' + esc(age(e.ts, now) + " ago: " + e.msg) + '</span>'
+         + '<button type="button" class="evx" data-id="' + id + '" title="dismiss">\u00d7</button>'
+         + '</div>';
+  }).join("");
+  if (vis.total > vis.list.length) {
+    html += '<div class="evmore">showing ' + vis.list.length + " of " + vis.total
+          + ' alerts in the last 24h</div>';
+  }
+  ev.innerHTML = html;
+}
+
+// Poll the shared list on the snapshot's cadence, and repaint as soon as an
+// answer arrives -- that is how a dismissal made on the other device shows up.
+loadDismissed().then(function () { renderEvents(lastSnap, Date.now() / 1000); });
+setInterval(function () {
+  loadDismissed().then(function () { renderEvents(lastSnap, Date.now() / 1000); });
+}, 15000);
+
+async function load() {
+  let snap = null;
+  try {
+    // port 8891 is the van-data JSON server; Next.js would 404 this path
+    const r = await fetch("https://harlan.cinnamon-pinecone.ts.net:8891/snapshot.json?t="
+      + Date.now(), {cache: "no-store"});
+    snap = await r.json();
+  } catch (e) {
+    var sm = $("#stalemark");
+    if (sm) sm.innerHTML = '<span class="stale">cannot read snapshot.json</span>';
+    var dd = $("#dish");
+    if (dd) dd.innerHTML = '<h2>Starlink EvilDish</h2><p class="muted">'
+      + esc(String(e).slice(0, 200)) + "</p>";
+    return;
+  }
+
+  const now = Date.now() / 1000;
+  // Ada 24-Oct-2026 the ages moved onto the masthead's two device lines (Matt):
+  // "Starlink EvilDish 57s" / "Delilah Router 57s". The old #when line is gone.
+  // Ada 27-Oct-2026 renders as words (Matt): "59 seconds", "1 minute 28 seconds",
+  // "1 hour 57 minutes 5 seconds".
+  // Ada 27-Oct-2026 threshold for showing minutes is now 200 seconds (Matt):
+  // below 200s is "198 seconds", at 200s+ is "3 minutes 20 seconds". Seconds-only
+  // until the number would read as awkward in words, then convert.
+  // Ada 02-Nov-2026 age() moved out to the alert module below (it is a pure
+  // formatter) so the alert renderer can run from a dismissal as well as from
+  // this tick. The 200-second switch between "N seconds" and "N minutes N
+  // seconds" is unchanged.
+  const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
+  if (agoDish) agoDish.textContent = age(snap.dish_ts, now);
+  if (agoRouter) agoRouter.textContent = age(snap.delilah_ts, now);
+
+  const stale = [];
+  let urgent = false;
+  if (snap.dish_stale || !snap.dish) {
+    stale.push("dish");
+    if (!snap.dish_ts || (now - snap.dish_ts) > 600) urgent = true;
+  }
+  if (snap.delilah_stale || !snap.dish) {
+    stale.push("router");
+    if (!snap.delilah_ts || (now - snap.delilah_ts) > 600) urgent = true;
+  }
+  var sm = $("#stalemark");
+  if (sm) {
+    sm.innerHTML = stale.length
+      ? '<span class="stale' + (urgent ? ' stale-red' : '') + '">stale: '
+        + esc(stale.join(", ")) + '</span>' : "";
+  }
+  // Ada 02-Nov-2026 the alerts live 24h and are dismissible (Matt). visibleEvents()
+  // does the window / dismissed / 80-cap filtering and is unit-tested; renderEvents()
+  // only paints. lastSnap is kept so a dismissal can re-render immediately instead
+  // of waiting up to 15s for the next tick.
+  lastSnap = snap;
+  renderEvents(snap, now);
+  // device controls panel: separate from #dish (which re-renders every 15s), so
+  // it survives the tick and picks up the fresh config on the next poll.
+
+  // Ada 24-Oct-2026 load() re-renders ALL of #dish every 15s, which wiped the
+  // throughput tiles (filled by loadHistory(), every 60s) and the usage numbers
+  // (filled by loadUsage(), every 60s). They then sat blank for up to 45s, so
+  // the boxes visibly disappeared and came back -- a loop. Snapshot their
+  // content and put it straight back after the re-render.
+  const keep = {};
+  for (const el of [$("#tput"), $("#usg-dish-level"), $("#usg-dish-used"), $("#usg-dish-cycle"),
+                   $("#usg-sim-level"), $("#usg-sim-used"), $("#usg-sim-cycle"),
+                   $("#usg-cost"), $("#usg-status")]) {
+    if (el) keep[el.id] = el.innerHTML;
+  }
+  var dsh = $("#dish");
+  if (dsh) {
+    dsh.innerHTML = snap.dish
+      ? dishSection(snap.dish)
+      : '<h2>Starlink EvilDish</h2><p class="muted">no dish data yet &mdash; '
+        + esc(snap.dish_error || "tunnel down") + "</p>";
+  }
+  for (const id in keep) {
+    const el = $(id);
+    if (el) el.innerHTML = keep[id];
+  }
+
+  var rm = $("#router");
+  if (rm) {
+    rm.innerHTML = snap.delilah
+      ? routerSection(snap.delilah)
+      : '<h2>Delilah Router</h2><p class="muted">no router data yet &mdash; '
+        + esc(snap.delilah_error || "tunnel down") + "</p>";
+  }
+
+  // Ada 23-Oct-2026 the sky-view facts come from the snapshot, not the history:
+  // they are the dish's current obstruction averages, not a time series.
+  if (snap.dish) {
+    const obf = $("#obfrac"), obd = $("#obdur"), obi = $("#obint");
+    if (obf) obf.textContent = snap.dish.frac_obstruct == null ? "&mdash;"
+      : (snap.dish.frac_obstruct * 100).toFixed(1) + " %";
+    if (obd) obd.textContent = snap.dish.obstruction_duration == null ? "&mdash;"
+      : snap.dish.obstruction_duration.toFixed(2) + " s";
+    if (obi) obi.textContent = snap.dish.obstruction_interval == null ? "&mdash;"
+      : snap.dish.obstruction_interval.toFixed(1) + " s";
+  }
+
+}
+
+function statTable(rows) {
+  const cols = ["min", "max", "avg", "current"];
+  const head = '<th scope="col"></th>'
+    + cols.map((c) => '<th scope="col">' + c + "</th>").join("");
+  const body = rows.map((r) => {
+    const s = r.stats;
+    const cells = s
+      ? cols.map((c) => '<td class="v">' + r.fmt(s[c]) + "</td>").join("")
+      : cols.map(() => '<td class="v muted">&mdash;</td>').join("");
+    return '<tr><th scope="row">' + esc(r.label) + "</th>" + cells + "</tr>";
+  }).join("");
+  return '<table class="stats"><thead><tr>' + head + "</tr></thead><tbody>"
+    + body + "</tbody></table>";
+}
+
+// Round up to a 1 / 2 / 2.5 / 5 x 10^n step so the axis ends on a readable
+// number rather than a raw data maximum.
+const niceCeil = (v) => {
+  if (!(v > 0)) return 1;
+  const p = Math.pow(10, Math.floor(Math.log10(v)));
+  const f = v / p;
+  return (f <= 1 ? 1 : f <= 2 ? 2 : f <= 2.5 ? 2.5 : f <= 5 ? 5 : 10) * p;
+};
+
+// Declare the rate unit from what actually happened in the window instead of
+// letting an auto-scale pick one, so a normal axis end is never mislabelled.
+// Ada 23-Oct-2026 the up/down panels are on a MOVING DATA scale, so the axis
+// picks a BYTES-per-second unit rather than the bits one: MB/s for a real link,
+// kB/s for an idle one. Same {f, u} shape the chart options already use, where f
+// divides the stored bits-per-second value into the displayed number.
+const dataRateUnit = (peakBps) => {
+  const bps = peakBps / 8;                        // bytes per second
+  return bps >= 1e6 ? { f: 8e6, u: "MB/s" }
+       : bps >= 1e3 ? { f: 8e3, u: "kB/s" }
+       : { f: 8, u: "B/s" };
+};
+const rateFmt = (u) => (v) => v == null ? "&mdash;"
+  : (v / u.f).toFixed(v / u.f >= 100 ? 0 : 1) + " " + u.u;
+// Tick-only form: the number alone, with the unit carried by the axis label.
+const rateNum = (u) => (v) => v == null ? "&mdash;"
+  : (v / u.f).toFixed(v / u.f >= 100 ? 0 : 1);
+
+const charts = [];
+const PENDING = [];   // chart specs queued by drawHistory, drawn once the DOM exists
+
+// Ada 24-Oct-2026 the host is the .plot div, which carries horizontal padding,
+// and clientWidth INCLUDES that padding -- so the chart was built wider than the
+// box it lives in and .plot{overflow:hidden} clipped ~13px off each side
+// (measured 1120px canvas in a 1094px content box at a 1265px viewport). Size to
+// the CONTENT box here and nowhere else, so construction and every later resize
+// agree on one number.
+const hostWidth = (host) => {
+  const cs = getComputedStyle(host);
+  const pad = (parseFloat(cs.paddingLeft) + parseFloat(cs.paddingRight)) || 0;
+  return Math.max(120, Math.floor((host.clientWidth || host.getBoundingClientRect().width) - pad));
+};
+
+const fitChart = (c) => {
+  if (c && c.u) c.u.setSize({ width: hostWidth(c.host), height: c.h || CHART_H });
+};
+
+const resize = ("ResizeObserver" in window) ? new ResizeObserver((entries) => {
+  for (const e of entries) {
+    const c = charts.find((c) => c.host === e.target);
+    if (c) fitChart(c);
+  }
+}) : null;
+
+// Ada 24-Oct-2026 fallback for a browser with no ResizeObserver: re-fit every
+// chart on a debounced window resize. drawHistory() also rebuilds the charts
+// every 60s, which re-reads the width, so this only covers the gap between a
+// resize and the next rebuild -- but without it a no-RO browser never catches up.
+if (!resize) {
+  let resizeTimer = null;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => charts.forEach(fitChart), 150);
+  });
+}
+
+function makeChart(hostId, opts, data) {
+  const host = document.getElementById(hostId);
+  if (!host) return null;
+  if (typeof uPlot === "undefined") {
+    host.innerHTML = '<p class="muted">uPlot did not load</p>';
+    return null;
+  }
+  let u = null;
+  try {
+    u = new uPlot(opts(hostWidth(host)), data, host);
+  } catch (e) {
+    host.innerHTML = '<p class="muted">chart failed: '
+      + esc(String(e).slice(0, 160)) + "</p>";
+    return null;
+  }
+  charts.push({ u: u, host: host, h: u.height });
+  if (resize) resize.observe(host);
+  return u;
+}
+
+function destroyCharts() {
+  for (const c of charts) {
+    try { c.u.destroy(); } catch (e) { /* already gone */ }
+    if (resize) resize.unobserve(c.host);
+  }
+  charts.length = 0;
+}
+
+// Ada 23-Oct-2026 the hint is built from constants and formatters and contains
+// entity references on purpose ("&middot;", "&deg;"), so escaping it turned them
+// into visible text. Titles are still escaped.
+const PANEL = (title, hint) =>
+  '<h3>' + esc(title) + ' <span class="hint">' + hint + "</span></h3>";
+
+// Series colours, keyed by the short name used in each panel. down/up and the
+// reference dashboard's own colours: purple for the download side, red/pink for
+// upload, rose for loss, emerald for a clear sky, sky for the p90 line.
+const SERIES_STYLE = {
+  down: { stroke: "#a78bfa", fill: "rgba(167,139,250,.20)", width: 1.5 },
+  up:   { stroke: "#fb7185", fill: "rgba(251,113,133,.20)", width: 1.5 },
+  drop: { stroke: "#fb7185", fill: "rgba(251,113,133,.20)", width: 1.5 },
+  ob:   { stroke: "#34d399", fill: "rgba(52,211,153,.18)", width: 1.5 },
+  lat:  { stroke: "#a78bfa", width: 1.5 },
+  p90:  { stroke: "#38bdf8", width: 1.5 },
+};
+const named = (keys) => keys.map((k) => Object.assign({ label: k }, SERIES_STYLE[k]));
+
+// One options builder per panel, so the measured width is applied in exactly
+// one place (makeChart) instead of being threaded through every call site.
+// The unit goes on the axis LABEL, not on every tick: at this axis width a
+// per-tick "Mb/s" leaves the numbers cramped and hard to read.
+const chartOpts = (w, yRange, yUnit, yFmt, series, h) => ({
+  width: w, height: h || CHART_H,
+  cursor: { drag: { x: true, y: false }, focus: { alpha: 0.3 } },
+  legend: { show: true },
+  scales: { x: { time: true }, y: { range: yRange } },
+  axes: [axis(), axis({ values: (u, s) => s.map(yFmt), label: yUnit })],
+  series: [{}].concat(series),
+});
+
+// Ada 23-Oct-2026 "Current Throughput" tiles: a label, a big value with its
+// unit, a short sparkline, and the min/max of the window. The sparkline is a
+// tiny inline SVG polyline -- a decoration on a number, not a graph, so it gets
+// no stat table and no axis.
+const TPUT_WINDOW = 60;          // one sample a minute -> the last hour
+
+function sparkSVG(vals, colour) {
+  const W = 100, H = 26;
+  const nums = vals.map(num).filter(v => v != null);
+  if (!nums.length) return '<svg class="spark" viewBox="0 0 100 26" aria-hidden="true"></svg>';
+  const max = Math.max(...nums) || 1;
+  const step = W / Math.max(1, vals.length - 1);
+  const pts = vals.map((v, i) => {
+    const n = num(v);
+    const y = n == null ? H : H - (n / max) * (H - 4) - 2;
+    return (i * step).toFixed(2) + "," + y.toFixed(2);
+  }).join(" ");
+  return `<svg class="spark" viewBox="0 0 100 26" preserveAspectRatio="none"
+    aria-hidden="true"><polyline fill="none" stroke="${colour}" stroke-width="1.2"
+    stroke-linejoin="round" points="${pts}"/></svg>`;
+}
+
+// Ada 24-Oct-2026 download and upload are ONE tile (Matt): both readings share a
+// box, each keeping its label, value, hour-long sparkline and min/max. The box
+// is still --box square, so the two halves split it evenly.
+function tputBlock(label, unit, vals, colour, fmt) {
+  const nums = vals.map(num).filter(v => v != null);
+  const lo = nums.length ? Math.min(...nums) : null;
+  const hi = nums.length ? Math.max(...nums) : null;
+  const last = nums.length ? nums[nums.length - 1] : null;
+  return `<div class="tblock">
+    <div class="tlabel">${esc(label)}</div>
+    <span class="tpval">${fmt(last)}<span class="u">${esc(unit)}</span></span>
+    ${sparkSVG(vals, colour)}
+    <span class="tpstats"><span>min ${fmt(lo)}</span> <span>max ${fmt(hi)}</span></span>
+  </div>`;
+}
+
+// Ada 24-Oct-2026 the box's shell is now static HTML (inside the row3 grid, so it
+// flows with connection and telemetry); this renders its CONTENT into #tput.
+function tputBox(unit, down, up, fmt) {
+  return `<div class="btitle">throughput</div>
+    <span class="info" tabindex="0" role="button"
+          aria-label="About throughput">i<span class="tip" role="tooltip">
+      <p><b>Download</b> &mdash; the dish&rsquo;s current download rate from the
+        satellite. <b>Upload</b> &mdash; its current upload rate to the
+        satellite.</p>
+      <p>Each sparkline is the last hour, one sample a minute; min and max are
+        over that hour.</p>
+      <p>Shown in MB/s, not Mb/s &mdash; 1 MB/s = 8 Mb/s.</p>
+    </span></span>
+    <div class="tblocks">
+      ${tputBlock("download", unit, down, "#a78bfa", fmt)}
+      ${tputBlock("upload", unit, up, "#fb7185", fmt)}
+    </div>`;
+}
+
+function drawHistory(h) {
+  const ts = h.ts || [];
+  if (!ts.length) {
+    $("history").innerHTML = '<h2>history</h2><p class="muted">'
+      + esc(h.error || "no history yet") + "</p>";
+    return;
+  }
+
+  const html = [];
+  html.push('<h2>history</h2>');
+  html.push('<p class="muted" style="font-size:1.05rem;margin:-.5rem 0 1.4rem">'
+    + esc(h.count + " samples over " + Math.round(h.hours) + " h")
+    + ' &middot; one row a minute from <code>/srv/van/data/van.db</code></p>');
+
+  // ---- obstruction over time: first panel in the section ---------------------
+  // Ada 24-Oct-2026 the sky view section is gone (Matt). The trend and its table
+  // are now an ordinary .chart panel -- same markup, same CHART_H, same stat
+  // table as the throughput / availability / latency panels below it -- and it
+  // sits at the TOP of the history section. The two sky boxes live under the
+  // dish section instead.
+  {
+    const ob = (h.frac_obstruct || []).map((v) => v == null ? null : v * 100);
+    const lim = Math.max(2, niceCeil((statsOf(ob) || { max: 0 }).max));
+    html.push('<div class="chart">');
+    html.push(PANEL("obstruction over time",
+                    "fraction of the sky blocked &middot; clear sky is under 2%"));
+    html.push('<div class="plot" id="ch-obstruction"></div>');
+    html.push(statTable([
+      { label: "obstruction", stats: statsOf(ob), fmt: (v) => v.toFixed(2) + " %" },
+    ]));
+    html.push("</div>");
+    PENDING.push(["ch-obstruction",
+      (w) => chartOpts(w, [0, lim], "%",
+                       (v) => v == null ? "&mdash;" : v.toFixed(0),
+                       named(["ob"])),
+      [ts, ob]]);
+  }
+
+  // ---- throughput: bidirectional --------------------------------------------
+  // Up is drawn above zero and down below it, so a quiet link reads as a flat
+  // line on the axis and a busy one shows which way the traffic went. The axis
+  // is symmetric about zero, which is what makes the two sides comparable.
+  // Ada 23-Oct-2026 the axis is in MB/s, not Mb/s -- the moving-data scale the
+  // gauges use, so a number reads the same everywhere on the page.
+  {
+    const down = h.downlink_bps || [], up = h.uplink_bps || [];
+    let peak = 1;
+    for (let i = 0; i < ts.length; i++) {
+      const a = Math.abs(num(down[i]) || 0), b = Math.abs(num(up[i]) || 0);
+      if (a > peak) peak = a;
+      if (b > peak) peak = b;
+    }
+    const u = dataRateUnit(peak);
+    const lim = niceCeil(peak / u.f);
+    const fmt = rateFmt(u);
+    html.push('<div class="chart">');
+    html.push(PANEL("actual throughput", u.u + " &middot; up above zero, down below"));
+    html.push('<div class="plot" id="ch-throughput"></div>');
+    html.push(statTable([
+      { label: "down", stats: statsOf(down), fmt: fmt },
+      { label: "up",   stats: statsOf(up),   fmt: fmt },
+    ]));
+    html.push("</div>");
+    PENDING.push(["ch-throughput",
+      (w) => chartOpts(w, [-lim * u.f, lim * u.f], u.u,
+                       // Signed on purpose: the down side is negative, so the
+                       // labels read -20 / 0 / +20 and each half of the axis is
+                       // unambiguous. Taking the absolute value would print the
+                       // same number at both ends.
+                       rateNum(u),
+                       named(["down", "up"])),
+      [ts, down.map((v) => v == null ? null : -v), up]]);
+  }
+
+  // ---- availability: drop rate ----------------------------------------------
+  {
+    const drop = (h.ping_drop || []).map((v) => v == null ? null : v * 100);
+    const lim = Math.max(1, niceCeil((statsOf(drop) || { max: 0 }).max));
+    html.push('<div class="chart">');
+    html.push(PANEL("availability", "pop ping drop rate &middot; 0% is clean"));
+    html.push('<div class="plot" id="ch-availability"></div>');
+    html.push(statTable([
+      { label: "drop", stats: statsOf(drop), fmt: (v) => v.toFixed(2) + " %" },
+    ]));
+    html.push("</div>");
+    PENDING.push(["ch-availability",
+      (w) => chartOpts(w, [0, lim], "%",
+                       (v) => v == null ? "&mdash;" : v.toFixed(0),
+                       named(["drop"])),
+      [ts, drop]]);
+  }
+
+  // ---- latency --------------------------------------------------------------
+  {
+    const lat = h.ping_latency || [], p90 = h.latency_p90 || [];
+    const lim = Math.max(50, niceCeil(Math.max(
+      (statsOf(lat) || { max: 0 }).max, (statsOf(p90) || { max: 0 }).max)));
+    html.push('<div class="chart">');
+    html.push(PANEL("latency", "pop ping RTT &middot; under 40 ms is excellent"));
+    html.push('<div class="plot" id="ch-latency"></div>');
+    html.push(statTable([
+      { label: "rtt", stats: statsOf(lat), fmt: (v) => v.toFixed(1) + " ms" },
+      { label: "p90", stats: statsOf(p90), fmt: (v) => v.toFixed(1) + " ms" },
+    ]));
+    html.push("</div>");
+    PENDING.push(["ch-latency",
+      (w) => chartOpts(w, [0, lim], "ms",
+                       (v) => v == null ? "&mdash;" : v.toFixed(0),
+                       named(["lat", "p90"])),
+      [ts, lat, p90]]);
+  }
+
+  destroyCharts();
+  $("history").innerHTML = html.join("");
+
+  // ---- up/down as Current Throughput tiles ---------------------------------
+  // Ada 23-Oct-2026 these replace the download/upload half-gauges: the tile
+  // shows the current rate, a one-hour sparkline, and the min/max of that hour.
+  // The unit comes from the window's own peak, so a quiet hour does not force
+  // "0.01 MB/s".
+  {
+    const down = (h.downlink_bps || []).slice(-TPUT_WINDOW);
+    const up = (h.uplink_bps || []).slice(-TPUT_WINDOW);
+    let peak = 1;
+    for (const v of down.concat(up)) peak = Math.max(peak, Math.abs(num(v) || 0));
+    const u = dataRateUnit(peak);
+    const fmt = v => v == null ? "&mdash;" : (v / u.f).toFixed(1);
+    if ($("tput")) $("tput").innerHTML = tputBox(u.u, down, up, fmt);
+  }
+
+  for (const [id, build, data] of PENDING) makeChart(id, build, data);
+  PENDING.length = 0;
+}
+
+async function loadHistory() {
+  const url = HISTORY_URL + "?hours=" + HISTORY_HOURS
+    + "&fields=downlink_bps,uplink_bps,ping_drop,ping_latency,frac_obstruct,latency_p90"
+    + "&t=" + Date.now();
+  try {
+    const r = await fetch(url, { cache: "no-store" });
+    const h = await r.json();
+    if (!r.ok) throw new Error(h.error || ("HTTP " + r.status));
+    drawHistory(h);
+  } catch (e) {
+    $("history").innerHTML = '<h2>history</h2><p class="muted">'
+      + esc(String(e).slice(0, 200)) + "</p>";
+  }
+}
+
+
+loadHistory();
+setInterval(loadHistory, 60000);
+</script>
+</body>
+</html>

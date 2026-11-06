@@ -808,12 +808,16 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
        <img> or its listeners. -->
   <div id="skyboxes"></div>
 </div>
-<div id="history"></div>
+<!-- Ada 06-Nov-2026 the history charts live on their own page now (Matt):
+     /van/history.html. The chart code is still in this file but nothing calls it. -->
+<p class="muted" style="text-align:center;margin:.2rem 0 .6rem">
+  <a href="history.html">history charts &rarr;</a></p>
 <div id="router"></div>
 
 <footer>
   <span>polled every 60s &middot; data from <code>/srv/van/data</code></span>
   <span>path: harlan &rarr; ssh :19200 &rarr; delilah &rarr; dish <code>192.168.100.1:9200</code></span>
+  <span><a href="history.html">history</a></span>
   <span><a href="https://harlan.cinnamon-pinecone.ts.net:8888/">&larr; harlan dashboard</a></span>
 </footer>
 
@@ -2034,7 +2038,10 @@ function tputBox(unit, down, up, fmt) {
 function drawHistory(h) {
   const ts = h.ts || [];
   if (!ts.length) {
-    $("history").innerHTML = '<h2>history</h2><p class="muted">'
+    // Ada 06-Nov-2026 the history section moved to history.html; this fetch still runs for the
+    // throughput tile's sparklines, so the section is optional here.
+    const host = $("history");
+    if (host) host.innerHTML = '<h2>history</h2><p class="muted">'
       + esc(h.error || "no history yet") + "</p>";
     return;
   }
@@ -2144,7 +2151,8 @@ function drawHistory(h) {
   }
 
   destroyCharts();
-  $("history").innerHTML = html.join("");
+  const host = $("history");
+  if (host) host.innerHTML = html.join("");
 
   // ---- up/down as Current Throughput tiles ---------------------------------
   // Ada 23-Oct-2026 these replace the download/upload half-gauges: the tile
@@ -2175,7 +2183,8 @@ async function loadHistory() {
     if (!r.ok) throw new Error(h.error || ("HTTP " + r.status));
     drawHistory(h);
   } catch (e) {
-    $("history").innerHTML = '<h2>history</h2><p class="muted">'
+    const host = $("history");
+    if (host) host.innerHTML = '<h2>history</h2><p class="muted">'
       + esc(String(e).slice(0, 200)) + "</p>";
   }
 }
@@ -2417,8 +2426,8 @@ document.addEventListener("keydown", (e) => {
 
 load();
 renderSky();
-loadHistory();
 loadUsage();
+loadHistory();
 // Ada 06-Nov-2026 the footer div sits after this script, so wait for the DOM before filling it
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", loadVersion);
@@ -2426,8 +2435,8 @@ if (document.readyState === "loading") {
   loadVersion();
 }
 setInterval(load, 15000);
-setInterval(loadHistory, 60000);
 setInterval(loadUsage, 60000);
+setInterval(loadHistory, 60000);
 setInterval(updateMap, 60000);
 
 /* TEMP error capture for diagnosis */
