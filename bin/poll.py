@@ -115,6 +115,12 @@ CREATE TABLE IF NOT EXISTS dish (
     ts            REAL PRIMARY KEY,
     state         TEXT,
     sw_version    TEXT,
+    -- Ada 06-Nov-2026 which terminal this row came from. Two dishes share the
+    -- route to 192.168.100.1, so without this the page's usage figure mixes kits
+    -- (plan §9/F). `id` is the device_info identity; hardware_version names the
+    -- model. sw_version is NOT an identity - it changes on a firmware update.
+    dish_id       TEXT,
+    dish_hw       TEXT,
     uptime_s      REAL,
     ping_drop     REAL,
     ping_latency  REAL,
@@ -143,6 +149,9 @@ CREATE INDEX IF NOT EXISTS idx_dish_ts ON dish(ts);
 # are added if missing -- the table may already exist with rows in it, which is
 # why this is an ALTER rather than a recreate.
 ADD_COLUMNS = (
+    # Ada 06-Nov-2026 terminal identity (see SCHEMA). Add-only, never a rename.
+    ("dish_id", "TEXT"),
+    ("dish_hw", "TEXT"),
     ("obstruction_duration", "REAL"),
     ("obstruction_interval", "REAL"),
     # Ada 23-Oct-2026 is_snr_above_noise_floor is a BOOLEAN, not a number, but
@@ -150,6 +159,26 @@ ADD_COLUMNS = (
     # INTEGER is the honest storage (1/0/NULL).
     ("is_snr_above_noise_floor", "INTEGER"),
 )
+
+
+def dish_terminal(status):
+    """(dish id, hardware version) from a dish device_info dict.
+
+    Both are None when the field is absent, which is the honest answer: an older sample
+    without identity is not the same as "the same dish as the last one".
+    """
+    return (status.get("id"), status.get("hardware_version"))
+
+
+def ensure_columns(con, table="dish", columns=ADD_COLUMNS):
+    """Add any missing columns to an existing table, leaving its rows alone."""
+    import sqlite3
+    for name, typ in columns:
+        try:
+            con.execute("ALTER TABLE %s ADD COLUMN %s %s" % (table, name, typ))
+        except sqlite3.OperationalError:
+            pass  # column already present on a re-run
+    con.commit()
 
 
 def log(msg):
@@ -317,13 +346,9 @@ def main():
     import sqlite3
     con = sqlite3.connect(DB, timeout=15)
     con.executescript(SCHEMA)
-    # Ada 23-Oct-2026 migrate an existing table in place (see ADD_COLUMNS)
-    for name, typ in ADD_COLUMNS:
-        try:
-            con.execute("ALTER TABLE dish ADD COLUMN %s %s" % (name, typ))
-        except sqlite3.OperationalError:
-            pass  # column already present on a re-run
-    con.commit()
+    # Ada 23-Oct-2026 migrate an existing table in place; Ada 06-Nov-2026 named it
+    # ensure_columns() so the add-only rule is testable (tests/test_poll_dish_identity.py).
+    ensure_columns(con)
 
     snap = load_snapshot()
     now = time.time()
@@ -346,11 +371,14 @@ def main():
 
         dec = pl.get("deciles_all_ping_latency[]") or []
         p90 = dec[9] if len(dec) > 9 else None
+        # Ada 06-Nov-2026 identity of the terminal that answered this poll
+        _dish_id, _dish_hw = dish_terminal(st)
 
         row = (
             now,
             st.get("state"),
             st.get("software_version"),
+            _dish_id, _dish_hw,
             num(st.get("uptime")),
             num(st.get("pop_ping_drop_rate")),
             num(st.get("pop_ping_latency_ms")),
@@ -381,7 +409,7 @@ def main():
         # migrations above mean a bare VALUES (...) no longer matches the table.
         con.execute(
             "INSERT OR REPLACE INTO dish ("
-            "ts, state, sw_version, uptime_s, ping_drop, ping_latency, "
+            "ts, state, sw_version, dish_id, dish_hw, uptime_s, ping_drop, ping_latency, "
             "downlink_bps, uplink_bps, snr, frac_obstruct, obstructed, "
             "azimuth, elevation, gps_sats, alerts, samples_15m, ping_drop_15m, "
             "latency_mean, latency_p90, usage_down, usage_up, power_w, "
@@ -392,6 +420,9 @@ def main():
             "ts": now,
             "state": st.get("state"),
             "sw_version": st.get("software_version"),
+            # Ada 06-Nov-2026 so the page can name the terminal it is reading
+            "id": _dish_id,
+            "hardware_version": _dish_hw,
             "uptime_s": num(st.get("uptime")),
             "ping_drop": num(st.get("pop_ping_drop_rate")),
             "ping_latency": num(st.get("pop_ping_latency_ms")),
