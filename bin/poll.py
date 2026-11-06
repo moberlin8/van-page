@@ -142,6 +142,20 @@ CREATE TABLE IF NOT EXISTS dish (
     power_w       REAL
 );
 CREATE INDEX IF NOT EXISTS idx_dish_ts ON dish(ts);
+-- Ada 06-Nov-2026 one row per poll per SIM, so the cycle total survives the router's counter
+-- resets and can be charted (plan §6/Task 4). `total_bytes` is carried + period, which is what
+-- the page shows.
+CREATE TABLE IF NOT EXISTS sim (
+    ts           REAL PRIMARY KEY,
+    slot         INTEGER,
+    cycle_start  REAL,
+    period_bytes INTEGER,
+    carried_bytes INTEGER,
+    total_bytes  INTEGER,
+    cap_bytes    INTEGER,
+    qgdcnt_rx    INTEGER,
+    qgdcnt_tx    INTEGER
+);
 """
 
 # Ada 23-Oct-2026 the dish reports two rolling averages of its "prolonged"
@@ -168,6 +182,56 @@ def dish_terminal(status):
     without identity is not the same as "the same dish as the last one".
     """
     return (status.get("id"), status.get("hardware_version"))
+
+
+def sim_cycle_start(now, day=28, hour=0):
+    """Epoch of the most recent SIM billing-cycle start, in the router's local time.
+
+    The anchor is what GL itself schedules the SIM reset from (`sim2_day`/`sim2_hour`, cron
+    `0 <hour> <day> * *`), so it is local, not UTC. Day 28 exists in every month, which is why
+    the plan's cycle needs no month-rollover arithmetic beyond stepping back one month.
+    """
+    def clamp(v, lo, hi, fallback):
+        try:
+            v = int(v)
+        except (TypeError, ValueError):
+            return fallback
+        return v if lo <= v <= hi else fallback
+
+    day = clamp(day, 1, 28, 28)
+    hour = clamp(hour, 0, 23, 0)
+    lt = time.localtime(now)
+    year, month = lt.tm_year, lt.tm_mon
+    start = time.mktime((year, month, day, hour, 0, 0, 0, 0, -1))
+    if start > now:
+        month -= 1
+        if month == 0:
+            month, year = 12, year - 1
+        start = time.mktime((year, month, day, hour, 0, 0, 0, 0, -1))
+    return start
+
+
+def sim_accumulate(prev, bytes_now, cycle_start):
+    """Carry a SIM's peak forward across a counter reset. Returns the new state dict.
+
+    GL's per-SIM counter is the sum of the module's QGDCNT deltas and it restarts whenever the
+    module re-initialises (a reboot or a slot switch) - twice this cycle already, with the flash
+    mirror following the reset rather than protecting against it. A drop in the counter is
+    therefore treated as "everything before the drop was real": the peak is added to `carried`,
+    which costs at most one sample interval per reset instead of the whole cycle.
+    """
+    if bytes_now is None:
+        bytes_now = (prev or {}).get("last") or 0
+    if not prev or prev.get("cycle_start") != cycle_start:
+        return {"carried": 0, "last": bytes_now, "cycle_start": cycle_start, "total": bytes_now}
+    carried = prev.get("carried") or 0
+    last = prev.get("last")
+    if last is not None and bytes_now < last:
+        carried += last
+        total = carried + bytes_now
+    else:
+        total = carried + bytes_now
+    return {"carried": carried, "last": bytes_now, "cycle_start": cycle_start, "total": total}
 
 
 def ensure_columns(con, table="dish", columns=ADD_COLUMNS):
@@ -357,6 +421,7 @@ def main():
     # snapshot.json is latest-wins, so we snapshot prev-state fields from the
     # loaded snap *before* overwriting them in this tick.
     prev_delilah = snap.get("delilah") or {}
+    prev_sim = snap.get("sim") or {}
     prev_dish_stale = snap.get("dish_stale", False)
 
     # ---- dish -----------------------------------------------------------------
@@ -477,6 +542,46 @@ def main():
         snap.pop("delilah_error", None)
         log("delilah ok  wwan_up=%ss active=%s ssid=%s csq=%s" % (
             r.get("wwan_uptime"), r.get("kmwan_active"), r.get("ssid"), r.get("csq")))
+
+        # ---- SIM data meter (plan §6/Task 4) ------------------------------------
+        # Ada 06-Nov-2026 read the router's per-SIM counters, roll the peak forward across a
+        # reset, and keep a row per SIM per tick. The cycle anchor is the one GL resets on
+        # (SIM2: day 28, per the MobileMustHave portal).
+        try:
+            _cycle_day = r.get("sim2_reset_day") or 28
+            _cycle_hour = r.get("sim2_reset_hour") or 0
+            _cycle = sim_cycle_start(now, _cycle_day, _cycle_hour)
+            _prev_sims = (prev_sim or {}).get("sims") or {}
+            _qgdcnt = (r.get("qgdcnt") or "").split(",")
+            _rx = int(_qgdcnt[0]) if len(_qgdcnt) == 2 and _qgdcnt[0].isdigit() else None
+            _tx = int(_qgdcnt[1]) if len(_qgdcnt) == 2 and _qgdcnt[1].isdigit() else None
+            _sims = {}
+            for _n in ("1", "2"):
+                _bytes = r.get("traffic_sim" + _n)
+                _bytes = int(_bytes) if (_bytes or "").isdigit() else None
+                _cap = r.get("sim%s_threshold" % _n)
+                _cap = int(_cap) if (_cap or "").isdigit() else None
+                _st = sim_accumulate(_prev_sims.get(_n), _bytes, _cycle)
+                _rec = {"label": "SIM" + _n, "slot": int(_n), "period_bytes": _bytes,
+                        "carried_bytes": _st["carried"], "total_bytes": _st["total"],
+                        "cap_bytes": _cap, "enabled": r.get("sim%s_enable" % _n) == "1"}
+                _sims[_n] = _rec
+                con.execute(
+                    "INSERT OR REPLACE INTO sim (ts, slot, cycle_start, period_bytes,"
+                    " carried_bytes, total_bytes, cap_bytes, qgdcnt_rx, qgdcnt_tx)"
+                    " VALUES (?,?,?,?,?,?,?,?,?)",
+                    (now, int(_n), _cycle, _bytes, _st["carried"], _st["total"], _cap,
+                     _rx if int(_n) == int(r.get("sim_slot") or 0) else None,
+                     _tx if int(_n) == int(r.get("sim_slot") or 0) else None))
+            con.commit()
+            snap["sim"] = {"cycle_start": _cycle, "slot": r.get("sim_slot"),
+                           "sims": _sims, "ts": now}
+            log("sim ok  slot=%s sim1=%s sim2=%s (cap sim2=%s)" % (
+                r.get("sim_slot"), _sims["1"]["total_bytes"], _sims["2"]["total_bytes"],
+                _sims["2"]["cap_bytes"]))
+        except Exception as e:
+            snap["sim_error"] = str(e)[:200]
+            log("sim FAILED: %s" % e)
     except Exception as e:
         snap["delilah_stale"] = True
         snap["delilah_error"] = str(e)[:300]
