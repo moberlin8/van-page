@@ -443,7 +443,7 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage .r .v{font-size:0.85rem}
 .csquare.usage .r .v.big{font-size:1.05rem;margin-right:0}
 .csquare.usage .r{gap:.25rem}
-.csquare.usage{grid-template-rows:auto repeat(8,auto);gap:.18rem}
+.csquare.usage{grid-template-rows:auto repeat(9,auto);gap:.18rem}
 .csquare .r{display:flex;align-items:baseline;justify-content:space-between;
   gap:.6rem;min-width:0;padding:.06rem .5rem}
 /* Ada 23-Oct-2026 the LABEL can shrink and wrap. A long label
@@ -1216,6 +1216,11 @@ function dishSection(d) {
         <b>no reading</b> is what a blank dish row means here, not a failure.
         SIM2 comes from the router&rsquo;s per-SIM counter, which restarts when
         the module re-initialises; the carrier&rsquo;s portal governs.</p>
+      <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that
+        expire unused. The two services differ: the dish&rsquo;s high-speed data does
+        <b>not</b> roll over, so whatever is left on the 24th is lost, while SIM2 banks
+        unused data for up to three cycles, so its remainder is not at risk until the
+        bank is full. A dash means the reading is missing, not that nothing is at risk.</p>
       <p><b>What a GB costs.</b> EvilDish $0.55/GB ($55 / 100 GB); SIM2 $1.95/GB
         fresh, $0.65/GB with the bank full; SIM1 (EIOT) $1.00/GB at 25 GB/30 d,
         $2.15/GB at 60 GB/360 d. The dish is the cheapest place to put bulk and
@@ -1235,6 +1240,8 @@ function dishSection(d) {
       <span class="v small" id="usg-sim-cycle">&mdash;</span></div>
     <div class="r"><span class="k">Cost/GB</span>
       <span class="v small" id="usg-cost">&mdash;</span></div>
+    <div class="r"><span class="k">At risk</span>
+      <span class="v small" id="usg-risk">&mdash;</span></div>
     <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text. -->
     <div class="r" style="justify-content:center"><span class="v" id="usg-status">&mdash;</span></div>
   </div>
@@ -2332,6 +2339,16 @@ function renderUsage(u) {
     " \u00b7 " + usageDaysText(c.daysLeft));
   txt("usg-cost", "$" + DISH_USD_GB.toFixed(2) + " dish \u00b7 $"
     + SIM2_USD_GB.toFixed(2) + " cell");
+
+  // ---- value at risk: the dollars of this cycle's allowance that expire unused ----
+  // The dish's high-speed data does not roll over, so everything left on the 24th is lost.
+  // SIM2 banks up to three cycles, so its remainder is only at risk past the bank ceiling.
+  const dishRisk = dishGB == null ? null
+    : Math.max(0, DISH_PLAN_GB - dishGB) * DISH_USD_GB;
+  const sim2Risk = sim2GB == null ? null
+    : Math.max(0, sim2GB - SIM2_BANK_GB) * SIM2_USD_GB;
+  const money = (v) => v == null ? "\u2014" : "$" + v.toFixed(2);
+  txt("usg-risk", money(dishRisk) + " dish \u00b7 " + money(sim2Risk) + " cell");
 
   // ---- one line for the most pressing level; green means no text (Matt, 26-Oct) ----
   let band = "ok", label = "";
