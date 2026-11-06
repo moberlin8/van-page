@@ -762,6 +762,11 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
   align-self:center;font-variant-numeric:tabular-nums}
 .csquare.skybox .skyval .u{font-size:1.3125rem;color:var(--faint);margin-left:.2rem}
 #obmap-note{font-size:1.05rem;margin-top:.6rem}
+/* Ada 06-Nov-2026 the page's own commit, very small at the bottom (Matt): which build is this?
+   Deliberately quiet - it is a reference, not information the page is trying to tell you. */
+.pagever{font-size:.6rem;line-height:1.2;opacity:.4;text-align:center;letter-spacing:.08em;
+  padding:.5rem 0 1.1rem;font-variant-numeric:tabular-nums;user-select:text}
+.pagever:empty{display:none}
 </style>
 </head>
 <body>
@@ -1481,6 +1486,22 @@ function routerSection(r) {
 const HISTORY_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/history";
 // Ada 24-Oct-2026 usage over the billing period (Matt).
 const USAGE_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/usage";
+// Ada 06-Nov-2026 the page's own commit (Matt). serve-data.py reads it from the page's working
+// tree, so it is never stale: the commit that changes this line is the one it reports.
+const VERSION_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/version";
+async function loadVersion() {
+  const el = $("pagever");
+  if (!el) return;
+  try {
+    const r = await fetch(VERSION_URL + "?t=" + Date.now(), { cache: "no-store" });
+    const v = await r.json();
+    if (!r.ok || v.error) throw new Error(v.error || ("HTTP " + r.status));
+    el.textContent = v.commit;
+    el.title = (v.branch ? v.branch + " @ " : "") + v.full;
+  } catch (e) {
+    el.textContent = "";          // decoration: a missing commit must not look like a fault
+  }
+}
 const HISTORY_HOURS = 16;
 
 // Ada 23-Oct-2026 150px was not enough for the throughput chart's axis. uPlot
@@ -2380,6 +2401,12 @@ load();
 renderSky();
 loadHistory();
 loadUsage();
+// Ada 06-Nov-2026 the footer div sits after this script, so wait for the DOM before filling it
+if (document.readyState === "loading") {
+  document.addEventListener("DOMContentLoaded", loadVersion);
+} else {
+  loadVersion();
+}
 setInterval(load, 15000);
 setInterval(loadHistory, 60000);
 setInterval(loadUsage, 60000);
@@ -2399,5 +2426,6 @@ window.addEventListener('unhandledrejection', function (e) {
   document.body.appendChild(d);
 });
 </script>
+<div id="pagever" class="pagever"></div>
 </body>
 </html>
