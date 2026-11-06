@@ -4,7 +4,10 @@
      Ada 27-Oct-2026 stale: field turns red (stale-red) when any source has been stale for more than 10 minutes (Matt).
      Ada 27-Oct-2026 State-change notifier: events array in snapshot.json (recorded by poll.py) is rendered below the stale mark on separate lines, oldest-to-newest, auto-expiring after 15 minutes (Matt).
      Ada 27-Oct-2026 Alerts ⚠️ now also shows when the dish state is not CONNECTED (e.g. rescanning sky after power cycle), with the dish state as tooltip.
-     Ada 06-Nov-2026 Usage tile revamped for two metered services (Matt): EvilDish and SIM2 each
+     Ada 06-Nov-2026 Delilah tile titles (Matt): "wan link" -> "repeater", "cellular modem" ->
+    "cellular", and "modem" -> the slot the module is actually using ("sim 1"/"sim 2", from
+    AT+QUIMSLOT via the probe), so the tile names the selected SIM instead of the hardware.
+    Ada 06-Nov-2026 Usage tile revamped for two metered services (Matt): EvilDish and SIM2 each
     get a level bar on their own cycle, the dish's rows are the van's kit only (a reading this
     box cannot attribute shows as "no reading", never as someone else's number -- the tile follows
     the route and a second terminal answers the same address), and the cost-per-GB figures live in
@@ -1354,7 +1357,7 @@ function routerSection(r) {
   return `
   <h2>delilah router</h2>
   <div class="routerwrap">
-    ${box("wan link",
+    ${box("repeater",
       `<p><b>Signal</b> &mdash; the WiFi client&rsquo;s received strength. -50 dBm is
         excellent, -67 dBm is the usual floor for high rates, -80 dBm is the edge of
         usability. <b>Bitrate</b> is the current link rate on HE80, where 1200 Mb/s
@@ -1422,7 +1425,7 @@ function routerSection(r) {
       ],
       "rows4")}
 
-    ${box("cellular modem",
+    ${box("cellular",
       `<p><b>RSRP</b> is the LTE reference signal received power: -80 dBm is a
         strong signal, -100 dBm is the edge of coverage. <b>CSQ</b> is the signal
         quality reading, where 20&ndash;31 is strong and under 10 is marginal.</p>`,
@@ -1442,8 +1445,12 @@ function routerSection(r) {
         row("rx / tx", bytesPair(w.rx_bytes, w.tx_bytes)),
       ])}
 
-    ${box("modem",
-      `<p>The modem&rsquo;s registered network and APN, its raw radio readings,
+    ${box("sim " + (w.sim_slot || "?"),
+      `<p><b>The title is the slot the modem is using right now</b> &mdash; SIM 1 or
+        SIM 2, read from the module itself (<code>AT+QUIMSLOT</code>). The router&rsquo;s
+        dual-SIM failover switches it; the preferred slot in the settings only says
+        which one it returns to, so the two can disagree.</p>
+      <p>The modem&rsquo;s registered network and APN, its raw radio readings,
         firmware and real-time clock. <code>qcsq</code> is
         <code>lte,rsrp,rsrq,sinr,rssi</code>. <b>Firmware</b> is the modem&rsquo;s
         own software version, from <code>AT+GMR</code>.</p>`,
