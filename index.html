@@ -1369,6 +1369,23 @@ function routerSection(r) {
   return `
   <h2>delilah router</h2>
   <div class="routerwrap">
+    <!-- Ada 06-Nov-2026 first tile in the router section, and renamed "WAN Connection"
+         (Matt): it answers "what is carrying the traffic", which is the first question
+         about the router. It was "failover" and sat after resources. -->
+    ${box("wan connection",
+      `<p>Delilah keeps multiple failover links and picks one: the WAN port (eth0/ETH1),
+        the wireless repeater (wwan/WirelessWAN${w.wwan_device ? " on " + esc(w.wwan_device) : ""}),
+        a tethered phone, or a cellular modem. The active link carries the traffic and
+        the others stand by. The metric is the failover priority &mdash; lower wins.
+        Sensitivity is ${esc(r.kmwan_sensitivity || "?")} ms. The box shows the three
+        highest-priority links in GUI order.</p>`,
+      [
+        ...(r.kmwan_members || []).slice(0, 3).map((m) =>
+          row(m.name, updown(!!m.up, r.kmwan_active === m.interface), "col")
+        ),
+        row("WAN Uptime", fmtUptime(r.kmwan_active_uptime)),
+      ],
+      "rows4")}
     ${box("repeater",
       `<p><b>Signal</b> &mdash; the WiFi client&rsquo;s received strength. -50 dBm is
         excellent, -67 dBm is the usual floor for high rates, -80 dBm is the edge of
@@ -1420,22 +1437,6 @@ function routerSection(r) {
         row("Update", orDash(fwDate(w.router_fw_date)), "small"),
       ], "rows7")}
 
-    <!-- Ada 24-Oct-2026 the failover box moved up to sit right after resources
-         (Matt); it used to come after the cellular modem box. -->
-    ${box("failover",
-      `<p>Delilah keeps multiple failover links and picks one: the WAN port (eth0/ETH1),
-        the wireless repeater (wwan/WirelessWAN${w.wwan_device ? " on " + esc(w.wwan_device) : ""}),
-        a tethered phone, or a cellular modem. The active link carries the traffic and
-        the others stand by. The metric is the failover priority &mdash; lower wins.
-        Sensitivity is ${esc(r.kmwan_sensitivity || "?")} ms. The box shows the three
-        highest-priority links in GUI order.</p>`,
-      [
-        ...(r.kmwan_members || []).slice(0, 3).map((m) =>
-          row(m.name, updown(!!m.up, r.kmwan_active === m.interface), "col")
-        ),
-        row("WAN Uptime", fmtUptime(r.kmwan_active_uptime)),
-      ],
-      "rows4")}
 
     ${box("cellular",
       `<p><b>RSRP</b> is the LTE reference signal received power: -80 dBm is a
