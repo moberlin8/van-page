@@ -798,6 +798,10 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
   </div>
 </div>
 
+<!-- Ada 06-Nov-2026 the router section comes first (Matt): the van's own link is the
+     first thing to look at, and the dish section follows it. -->
+<div id="router"></div>
+
 <!-- Ada 24-Oct-2026 ALL SIX boxes under this heading wrap together (Matt): #dish and
      #skyboxes are display:contents, so their boxes are grid items of this one
      grid. The dish's <h2> is inside #dish and spans every column. -->
@@ -812,7 +816,6 @@ table.stats tbody th{background:transparent;color:var(--title);font-weight:400;
      /van/history.html. The chart code is still in this file but nothing calls it. -->
 <p class="muted" style="text-align:center;margin:.2rem 0 .6rem">
   <a href="history.html">history charts &rarr;</a></p>
-<div id="router"></div>
 
 <footer>
   <span>polled every 60s &middot; data from <code>/srv/van/data</code></span>
