@@ -28,6 +28,7 @@ import http.server
 import json
 import os
 import posixpath
+import subprocess
 import socketserver
 import sqlite3
 import tempfile
@@ -36,6 +37,43 @@ import time
 import urllib.parse
 
 ROOT = "/srv/van/data"
+
+# Ada 06-Nov-2026 the page's own commit, so the bottom of the page can say which build is being
+# looked at (Matt). The page is served from a git working tree that is bind-mounted into the
+# homepage container, so the answer is read from that tree at request time rather than baked into
+# the HTML: a hard-coded SHA is stale the moment the commit that writes it lands - which is
+# exactly the commit you would want to see.
+PAGE_REPO = "/srv/van"
+_VERSION_CACHE = {"at": 0.0, "value": None}
+
+
+def page_version(repo=None, max_age=10.0):
+    """{'commit': short sha, 'full': sha, 'branch': name} for the page's working tree.
+
+    Cached for `max_age` seconds so a page load does not shell out to git on every request, and
+    `max_age=0` forces a fresh read (the tests use that). A directory that is not a repo, or a
+    missing git, returns {'error': ...} rather than raising: the footer is decoration, and it must
+    never be able to break the page.
+    """
+    repo = PAGE_REPO if repo is None else repo
+    now = time.time()
+    if max_age and _VERSION_CACHE["value"] is not None and now - _VERSION_CACHE["at"] < max_age:
+        return _VERSION_CACHE["value"]
+
+    def git(*args):
+        return subprocess.run(["git", "-C", repo] + list(args), capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+
+    try:
+        full = git("rev-parse", "HEAD")
+        if not full:
+            return {"error": "not a git working tree: %s" % repo}
+        value = {"commit": full[:7], "full": full,
+                 "branch": git("rev-parse", "--abbrev-ref", "HEAD")}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": "cannot read the page's commit: %s" % e}
+    _VERSION_CACHE.update({"at": now, "value": value})
+    return value
 DB = os.path.join(ROOT, "van.db")
 HOST = "127.0.0.1"
 PORT = 8891
@@ -662,6 +700,12 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/version", "/version.json"):
+            # Ada 06-Nov-2026 which build of the page is this (Matt's footer)
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(page_version()).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/usage", "/usage.json"):
