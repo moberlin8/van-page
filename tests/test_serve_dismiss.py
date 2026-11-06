@@ -19,9 +19,13 @@ import unittest
 
 # The file is serve-data.py (hyphen), so `import serve_data` cannot work: load it
 # by path. bin/ is on sys.path for poll.py's sake, which has no hyphen.
-sys.path.insert(0, "/home/ada/van/bin")
+# ## Ada 06-Nov-2026 resolve bin/ from this tree, not the deployed /home/ada/van:
+# the hardcoded path made every run test the deployed copy (gate: test_imports_are_local.py)
+import os
+_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+sys.path.insert(0, os.path.join(_ROOT, "bin"))
 _spec = importlib.util.spec_from_file_location(
-    "serve_data", "/home/ada/van/bin/serve-data.py")
+    "serve_data", os.path.join(_ROOT, "bin", "serve-data.py"))
 sd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sd)
 
