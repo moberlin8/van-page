@@ -53,7 +53,8 @@ class TestLegacyStore(unittest.TestCase):
                          (BASE + 160, 900000, 5000, "sw.B"), (BASE + 240, 902000, 5500, "sw.B")])
         con.commit()
         con.close()
-        got, err = sd.read_usage(db=path)
+        # both fixtures' kits are named: the point here is the legacy schema, not attribution
+        got, err = sd.read_usage(db=path, van_ids=("sw.A", "sw.B"))
         self.assertIsNone(err)
         self.assertAlmostEqual(4000.0, got["down"], delta=1)
         self.assertEqual(2, len(got["terminals"]))
@@ -79,7 +80,8 @@ class TestPerTerminalSums(unittest.TestCase):
                 (BASE + 80, 3000, 400, "sw.A", None, None),
                 (BASE + 160, 900000, 5000, "sw.B", None, None),
                 (BASE + 240, 902000, 5500, "sw.B", None, None)]
-        got, err = sd.read_usage(db=self._db(rows))
+        # both kits named: this test is about a switch not being traffic
+        got, err = sd.read_usage(db=self._db(rows), van_ids=("sw.A", "sw.B"))
         self.assertIsNone(err)
         self.assertAlmostEqual(4000.0, got["down"], delta=1)     # 2000 + 2000, no 897000
         self.assertAlmostEqual(800.0, got["up"], delta=1)        # 100->400 (+300) and 5000->5500 (+500)
@@ -93,7 +95,7 @@ class TestPerTerminalSums(unittest.TestCase):
         rows = [(BASE, 1000, 0, "2026.10.12.mr88921.3", "ut01abc", "rev4_pez_proto1"),
                 (BASE + 80, 3000, 0, "2026.10.12.mr88921.3", "ut01abc", "rev4_pez_proto1"),
                 (BASE + 160, 4000, 0, "2026.11.01.mr90000.1", "ut01abc", "rev4_pez_proto1")]
-        got, err = sd.read_usage(db=self._db(rows))
+        got, err = sd.read_usage(db=self._db(rows), van_ids=("ut01abc",))
         self.assertIsNone(err)
         self.assertAlmostEqual(3000.0, got["down"], delta=1)
         self.assertEqual(1, len(got["terminals"]), got["terminals"])

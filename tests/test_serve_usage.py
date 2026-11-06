@@ -70,7 +70,10 @@ class TestReadUsage(unittest.TestCase):
         base = ts(2026, 10, 25) + 3600          # inside the current period, after 25-Oct
         db = self._db([(base, 1000, 100), (base + 80, 3000, 400),
                        (base + 160, 2500, 450), (base + 240, 5000, 700)])
-        got, err = sd.read_usage(db=db)
+        # Ada 06-Nov-2026 attribution is explicit now: this fixture's rows are one terminal,
+        # named here so the test is about summing rather than about whose data it is (see
+        # test_serve_usage_van_only.py for the van-only contract).
+        got, err = sd.read_usage(db=db, van_ids=("sw",))
         self.assertIsNone(err)
         # rolling counter: sum only the increases -> down 2000+2500, up 300+50+250
         self.assertAlmostEqual(4500.0, got["down"], delta=1)

@@ -298,6 +298,17 @@ MANUAL_WINDOW = ("2026-10-21", "2026-10-25")   # UTC, [start, end)
 MANUAL_TOTAL = 15.8e9
 MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
 
+# Ada 06-Nov-2026 the van's own dish, and the only terminal /van may count.
+# Matt: "ignore data from BigBoyDish, and do not show BigBoyDish data on the Van Page." Two
+# Starlink terminals answer the same address, and this box has spent the cycle reading Geddy's
+# kit over the home path while the van's dish sat powered off on the WAN jack. Their counters
+# have unrelated baselines, so one total across both is mostly someone else's usage.
+# Entries are matched against terminal_group(): the stored dish_id, or the firmware string for
+# rows written before the poller stored one. EMPTY MEANS NOTHING IS ATTRIBUTED, which is the
+# honest state until EvilDish is up and its identity is confirmed - a number nobody can defend
+# is worse than no number. To attribute, list the kit here (or pass van_ids= in a test).
+VAN_DISH_IDS = ()
+
 
 # Ada 06-Nov-2026 which terminal a dish row came from. Two Starlink terminals answer the same
 # tcp address, so the tile follows whichever wins the route and their counters have unrelated
@@ -312,6 +323,25 @@ def terminal_group(sw_version, dish_id):
     if sw_version:
         return sw_version
     return None
+
+
+def sim_usage(con):
+    """Latest SIM-meter row per slot: what the router has seen since the cycle began.
+
+    Ada 06-Nov-2026 Task 4's meter writes a row per SIM per poll, rolling the counter's peak
+    forward across a module re-init, so the newest row per slot carries the cycle figure the
+    page shows for SIM2. Absent table, absent data: a store from before the meter simply
+    reports nothing rather than failing the whole usage response.
+    """
+    if not {r[1] for r in con.execute("PRAGMA table_info(sim)")}:
+        return {}
+    out = {}
+    for ts, slot, cs, pb, cb, tb, cap in con.execute(
+            "SELECT ts, slot, cycle_start, period_bytes, carried_bytes, total_bytes,"
+            " cap_bytes FROM sim ORDER BY ts ASC"):
+        out[str(slot)] = {"ts": ts, "cycle_start": cs, "period_bytes": pb,
+                          "carried_bytes": cb, "total_bytes": tb, "cap_bytes": cap}
+    return out
 
 
 def manual_lump_for(start, end):
@@ -347,7 +377,7 @@ def billing_period(now=None):
     return start.timestamp(), end.timestamp()
 
 
-def read_usage(db=None):
+def read_usage(db=None, van_ids=None):
     """Total bytes moved in the current billing period.
 
     `db` defaults to None and resolves the module global in the body, so a test can point
@@ -361,6 +391,8 @@ def read_usage(db=None):
     """
     if db is None:
         db = DB
+    if van_ids is None:
+        van_ids = VAN_DISH_IDS
     if not os.path.exists(db):
         return None, "no database yet"
     start, end = billing_period()
@@ -379,6 +411,7 @@ def read_usage(db=None):
         rows = con.execute(
             "SELECT %s FROM dish WHERE ts >= ? ORDER BY ts ASC" % ", ".join(cols),
             (start,)).fetchall()
+        sims = sim_usage(con)
     except sqlite3.Error as e:
         return None, "cannot read usage: %s" % e
     finally:
@@ -409,17 +442,46 @@ def read_usage(db=None):
         g["samples"] += 1
         g["last"] = ts
 
-    down = sum(g["down"] for g in groups.values())
-    up = sum(g["up"] for g in groups.values())
-    terminals = [{k: g[k] for k in ("id", "hw", "label", "down", "up",
+    # Ada 06-Nov-2026 count the van's kit only, and say so when there is nothing to count.
+    van_set = {str(v) for v in van_ids}
+    for key, g in groups.items():
+        g["van"] = key in van_set
+    counted = [g for g in groups.values() if g["van"]]
+    if not van_set:
+        attribution = {
+            "van_dish_ids": [],
+            "counted": [],
+            "reason": "no van-dish identity is configured (VAN_DISH_IDS is empty), so no "
+                      "terminal's usage can be attributed to the van's dish",
+        }
+        down = up = None
+    elif not counted:
+        attribution = {
+            "van_dish_ids": sorted(van_set),
+            "counted": [],
+            "reason": "no dish rows in this period belong to the van's kit",
+        }
+        down = up = None
+    else:
+        down = sum(g["down"] for g in counted)
+        up = sum(g["up"] for g in counted)
+        attribution = {"van_dish_ids": sorted(van_set),
+                       "counted": [g["label"] for g in counted],
+                       "reason": "van's kit only"}
+    # the breakdown stays in the response as diagnostics, flagged, so the page can decide
+    # what to render instead of having the decision buried in here
+    terminals = [{k: g[k] for k in ("id", "hw", "label", "van", "down", "up",
                                     "samples", "first", "last")}
                  for g in sorted(groups.values(), key=lambda x: x["down"], reverse=True)]
 
     now = time.time()
     # Ada 06-Nov-2026 the lump, only for a period that contains Oct 21-24 (see MANUAL_WINDOW).
     manual_down, manual_up = manual_lump_for(start, end)
-    down += manual_down
-    up += manual_up
+    if down is None:
+        manual_down = manual_up = 0.0        # an unknown total has nothing to add it to
+    else:
+        down += manual_down
+        up += manual_up
     return {
         "billing_day": BILLING_DAY,
         "period_start": start,
@@ -429,7 +491,12 @@ def read_usage(db=None):
         "days_left": max(0, int(round((end - now) / 86400.0))),
         "down": down,
         "up": up,
-        "total": down + up,
+        "total": None if down is None else down + up,
+        # Ada 06-Nov-2026 what the totals are made of, and why they can be null.
+        "attribution": attribution,
+        # Ada 06-Nov-2026 the other metered service, so the tile reads one endpoint: SIM2's
+        # cycle figure as the router's own meter recorded it (the carrier's portal governs).
+        "sim": sims,
         # The database only started collecting on 22-Oct-2026, so the period is
         # covered from then -- the page says so rather than claiming a full month.
         "covered_from": rows[0][0],
