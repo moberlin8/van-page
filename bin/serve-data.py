@@ -299,6 +299,21 @@ MANUAL_TOTAL = 15.8e9
 MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
 
 
+# Ada 06-Nov-2026 which terminal a dish row came from. Two Starlink terminals answer the same
+# tcp address, so the tile follows whichever wins the route and their counters have unrelated
+# baselines; summing across a switch counts the difference between two kits as traffic.
+# `dish_id` is the exact answer once the poller stores it (06-Nov onward). Before that the
+# firmware string is the only marker that exists, so it is the fallback - coarse, but it is the
+# difference that produced the 0.78 GB of phantom in the 06-Nov reconciliation.
+def terminal_group(sw_version, dish_id):
+    """Identity to group usage by: the stored device id, else the firmware string, else None."""
+    if dish_id:
+        return dish_id
+    if sw_version:
+        return sw_version
+    return None
+
+
 def manual_lump_for(start, end):
     """(down, up) of the un-covered Oct 21-24 roaming, or (0.0, 0.0) if absent.
 
@@ -354,9 +369,16 @@ def read_usage(db=None):
     except sqlite3.Error as e:
         return None, "cannot open usage: %s" % e
     try:
+        # Ada 06-Nov-2026 select the identity columns only if they exist: the poller migrates
+        # the table on its next tick, and /usage must keep answering in the window before that
+        # (a legacy store groups by firmware string, which is all it has).
+        have = {r[1] for r in con.execute("PRAGMA table_info(dish)")}
+        cols = ["ts", "usage_down", "usage_up"]
+        for name in ("sw_version", "dish_id", "dish_hw"):
+            cols.append(name if name in have else "NULL AS " + name)
         rows = con.execute(
-            "SELECT ts, usage_down, usage_up FROM dish WHERE ts >= ?"
-            " ORDER BY ts ASC", (start,)).fetchall()
+            "SELECT %s FROM dish WHERE ts >= ? ORDER BY ts ASC" % ", ".join(cols),
+            (start,)).fetchall()
     except sqlite3.Error as e:
         return None, "cannot read usage: %s" % e
     finally:
@@ -364,17 +386,34 @@ def read_usage(db=None):
     if not rows:
         return None, "no samples in this billing period yet"
 
-    down = up = 0.0
-    prev_d = prev_u = None
-    for ts, d, u in rows:
-        if prev_d is not None and d is not None and d > prev_d:
-            down += d - prev_d
-        if prev_u is not None and u is not None and u > prev_u:
-            up += u - prev_u
+    # Ada 06-Nov-2026 accumulate INSIDE each terminal. A switch starts that terminal's own
+    # prev trackers, so the step between two kits' unrelated baselines is never counted.
+    groups = {}
+    for ts, d, u, sw, did, dhw in rows:
+        key = terminal_group(sw, did)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"id": did, "hw": dhw, "label": key or "unknown",
+                               "down": 0.0, "up": 0.0, "samples": 0,
+                               "first": ts, "last": ts, "prev_down": None, "prev_up": None}
+        if g["prev_down"] is not None and d is not None and d > g["prev_down"]:
+            g["down"] += d - g["prev_down"]
+        if g["prev_up"] is not None and u is not None and u > g["prev_up"]:
+            g["up"] += u - g["prev_up"]
         if d is not None:
-            prev_d = d
+            g["prev_down"] = d
         if u is not None:
-            prev_u = u
+            g["prev_up"] = u
+        if did and not g["id"]:
+            g["id"], g["hw"] = did, dhw
+        g["samples"] += 1
+        g["last"] = ts
+
+    down = sum(g["down"] for g in groups.values())
+    up = sum(g["up"] for g in groups.values())
+    terminals = [{k: g[k] for k in ("id", "hw", "label", "down", "up",
+                                    "samples", "first", "last")}
+                 for g in sorted(groups.values(), key=lambda x: x["down"], reverse=True)]
 
     now = time.time()
     # Ada 06-Nov-2026 the lump, only for a period that contains Oct 21-24 (see MANUAL_WINDOW).
@@ -396,6 +435,9 @@ def read_usage(db=None):
         "covered_from": rows[0][0],
         "covered_to": rows[-1][0],
         "samples": len(rows),
+        # Ada 06-Nov-2026 per-terminal detail: the total is the sum of these, so the page can
+        # name which terminal it is reading instead of silently using both.
+        "terminals": terminals,
         # Ada 06-Nov-2026 say whether the manual figure was counted, and how much of it,
         # so nobody has to read this file to know what the total is made of.
         "manual_lump": {

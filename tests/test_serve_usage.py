@@ -59,9 +59,9 @@ class TestReadUsage(unittest.TestCase):
         path = os.path.join(tempfile.mkdtemp(), "van.db")
         con = sqlite3.connect(path)
         con.execute("create table dish (ts real primary key, usage_down integer,"
-                    " usage_up integer, sw_version text)")
-        con.executemany("insert into dish values (?,?,?,?)",
-                        [(t, d, u, "sw") for t, d, u in rows])
+                    " usage_up integer, sw_version text, dish_id text, dish_hw text)")
+        con.executemany("insert into dish values (?,?,?,?,?,?)",
+                        [(t, d, u, "sw", None, None) for t, d, u in rows])
         con.commit()
         con.close()
         return path
