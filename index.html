@@ -1199,59 +1199,6 @@ function dishSection(d) {
        boxes above it. drawHistory() fills it. -->
   <div class="csquare tbox" id="tput"></div>
 
-  <!-- Ada 24-Oct-2026 usage over the billing period (Matt). The numbers come
-       from a separate /usage endpoint; this is just the shell. -->
-  <div class="csquare list usage">
-    <div class="btitle">usage</div>
-    <span class="info" tabindex="0" role="button"
-          aria-label="About usage">i<span class="tip" role="tooltip">
-      <p><b>Two services, two cycles.</b> EvilDish (Starlink Roam 100 GB,
-        $55/mo) resets on the 25th and keeps working at <b>unlimited low-speed</b>
-        after 100 GB of high-speed &mdash; it never stops. SIM2 (RoamLink Flex 20,
-        $39/mo) resets on the 28th, banks unused data up to three cycles
-        (<b>60 GB</b> available at once), and is <b>suspended until the next
-        cycle</b> once everything is spent. So the dish runs out of speed and the
-        SIM runs out of service.</p>
-      <p><b>Levels.</b> EvilDish: green under 50 GB, amber 50&ndash;100 GB (half
-        the high-speed spent), red at 100 GB (low-speed from there). SIM2: amber
-        from 16 GB of 20, red at the 60 GB bank ceiling. Colour is a level, not a
-        throttle this page applies.</p>
-      <p><b>Attribution.</b> The dish&rsquo;s counters are <b>rolling</b>, so a
-        total is the sum of the counter&rsquo;s increases, never a reading. Two
-        terminals answer the same address, and the tile follows whichever wins the
-        route, so a period is only ever reported for the van&rsquo;s own kit:
-        <b>no reading</b> is what a blank dish row means here, not a failure.
-        SIM2 comes from the router&rsquo;s per-SIM counter, which restarts when
-        the module re-initialises; the carrier&rsquo;s portal governs.</p>
-      <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that
-        expire unused. The two services differ: the dish&rsquo;s high-speed data does
-        <b>not</b> roll over, so whatever is left on the 24th is lost, while SIM2 banks
-        unused data for up to three cycles, so its remainder is not at risk until the
-        bank is full. A dash means the reading is missing, not that nothing is at risk.</p>
-      <p><b>What a GB costs.</b> EvilDish $0.55/GB ($55 / 100 GB); SIM2 $1.95/GB
-        fresh, $0.65/GB with the bank full; SIM1 (EIOT) $1.00/GB at 25 GB/30 d,
-        $2.15/GB at 60 GB/360 d. The dish is the cheapest place to put bulk and
-        the only one whose overflow is free.</p>
-    </span></span>
-    <div class="r"><span class="k">EvilDish</span>
-      <span class="v" id="usg-dish-level">&mdash;</span></div>
-    <div class="r"><span class="k">Used</span>
-      <span class="v" id="usg-dish-used">&mdash;</span></div>
-    <div class="r"><span class="k">Cycle</span>
-      <span class="v small" id="usg-dish-cycle">&mdash;</span></div>
-    <div class="r"><span class="k">SIM2 cell</span>
-      <span class="v" id="usg-sim-level">&mdash;</span></div>
-    <div class="r"><span class="k">Used</span>
-      <span class="v" id="usg-sim-used">&mdash;</span></div>
-    <div class="r"><span class="k">Cycle</span>
-      <span class="v small" id="usg-sim-cycle">&mdash;</span></div>
-    <div class="r"><span class="k">Cost/GB</span>
-      <span class="v small" id="usg-cost">&mdash;</span></div>
-    <div class="r"><span class="k">At risk</span>
-      <span class="v small" id="usg-risk">&mdash;</span></div>
-    <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text. -->
-    <div class="r" style="justify-content:center"><span class="v" id="usg-status">&mdash;</span></div>
-  </div>
 
   <!-- Ada 24-Oct-2026 the "dish orientation" act is GONE (Matt): elevation and the
        GPS fix moved into the telemetry box above, so there is no heading and no
@@ -1376,6 +1323,60 @@ function routerSection(r) {
   return `
   <h2>delilah router</h2>
   <div class="routerwrap">
+  <!-- Ada 06-Nov-2026 usage moved here from the dish section (Matt): it covers both
+       Starlink and the cellular connections, so it belongs with the router. The numbers
+       come from a separate /usage endpoint; this is just the shell. -->
+  <div class="csquare list usage">
+    <div class="btitle">usage</div>
+    <span class="info" tabindex="0" role="button"
+          aria-label="About usage">i<span class="tip" role="tooltip">
+      <p><b>Two services, two cycles.</b> EvilDish (Starlink Roam 100 GB,
+        $55/mo) resets on the 25th and keeps working at <b>unlimited low-speed</b>
+        after 100 GB of high-speed &mdash; it never stops. SIM2 (RoamLink Flex 20,
+        $39/mo) resets on the 28th, banks unused data up to three cycles
+        (<b>60 GB</b> available at once), and is <b>suspended until the next
+        cycle</b> once everything is spent. So the dish runs out of speed and the
+        SIM runs out of service.</p>
+      <p><b>Levels.</b> EvilDish: green under 50 GB, amber 50&ndash;100 GB (half
+        the high-speed spent), red at 100 GB (low-speed from there). SIM2: amber
+        from 16 GB of 20, red at the 60 GB bank ceiling. Colour is a level, not a
+        throttle this page applies.</p>
+      <p><b>Attribution.</b> The dish&rsquo;s counters are <b>rolling</b>, so a
+        total is the sum of the counter&rsquo;s increases, never a reading. Two
+        terminals answer the same address, and the tile follows whichever wins the
+        route, so a period is only ever reported for the van&rsquo;s own kit:
+        <b>no reading</b> is what a blank dish row means here, not a failure.
+        SIM2 comes from the router&rsquo;s per-SIM counter, which restarts when
+        the module re-initialises; the carrier&rsquo;s portal governs.</p>
+      <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that
+        expire unused. The two services differ: the dish&rsquo;s high-speed data does
+        <b>not</b> roll over, so whatever is left on the 24th is lost, while SIM2 banks
+        unused data for up to three cycles, so its remainder is not at risk until the
+        bank is full. A dash means the reading is missing, not that nothing is at risk.</p>
+      <p><b>What a GB costs.</b> EvilDish $0.55/GB ($55 / 100 GB); SIM2 $1.95/GB
+        fresh, $0.65/GB with the bank full; SIM1 (EIOT) $1.00/GB at 25 GB/30 d,
+        $2.15/GB at 60 GB/360 d. The dish is the cheapest place to put bulk and
+        the only one whose overflow is free.</p>
+    </span></span>
+    <div class="r"><span class="k">EvilDish</span>
+      <span class="v" id="usg-dish-level">&mdash;</span></div>
+    <div class="r"><span class="k">Used</span>
+      <span class="v" id="usg-dish-used">&mdash;</span></div>
+    <div class="r"><span class="k">Cycle</span>
+      <span class="v small" id="usg-dish-cycle">&mdash;</span></div>
+    <div class="r"><span class="k">SIM2 cell</span>
+      <span class="v" id="usg-sim-level">&mdash;</span></div>
+    <div class="r"><span class="k">Used</span>
+      <span class="v" id="usg-sim-used">&mdash;</span></div>
+    <div class="r"><span class="k">Cycle</span>
+      <span class="v small" id="usg-sim-cycle">&mdash;</span></div>
+    <div class="r"><span class="k">Cost/GB</span>
+      <span class="v small" id="usg-cost">&mdash;</span></div>
+    <div class="r"><span class="k">At risk</span>
+      <span class="v small" id="usg-risk">&mdash;</span></div>
+    <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text. -->
+    <div class="r" style="justify-content:center"><span class="v" id="usg-status">&mdash;</span></div>
+  </div>
     <!-- Ada 06-Nov-2026 first tile in the router section, and renamed "WAN Connection"
          (Matt): it answers "what is carrying the traffic", which is the first question
          about the router. It was "failover" and sat after resources. -->
@@ -1804,7 +1805,7 @@ async function load() {
   const keep = {};
   for (const el of [$("#tput"), $("#usg-dish-level"), $("#usg-dish-used"), $("#usg-dish-cycle"),
                    $("#usg-sim-level"), $("#usg-sim-used"), $("#usg-sim-cycle"),
-                   $("#usg-cost"), $("#usg-status")]) {
+                   $("#usg-cost"), $("#usg-risk"), $("#usg-status")]) {
     if (el) keep[el.id] = el.innerHTML;
   }
   var dsh = $("#dish");
@@ -1814,17 +1815,18 @@ async function load() {
       : '<h2>Starlink EvilDish</h2><p class="muted">no dish data yet &mdash; '
         + esc(snap.dish_error || "tunnel down") + "</p>";
   }
-  for (const id in keep) {
-    const el = $(id);
-    if (el) el.innerHTML = keep[id];
-  }
-
   var rm = $("#router");
   if (rm) {
     rm.innerHTML = snap.delilah
       ? routerSection(snap.delilah)
       : '<h2>Delilah Router</h2><p class="muted">no router data yet &mdash; '
         + esc(snap.delilah_error || "tunnel down") + "</p>";
+  }
+  // Ada 06-Nov-2026 the usage tile lives in the router section now, so the kept content is put
+  // back AFTER both re-renders - restoring between them would wipe the tile for up to 45s.
+  for (const id in keep) {
+    const el = $(id);
+    if (el) el.innerHTML = keep[id];
   }
 
   // Ada 23-Oct-2026 the sky-view facts come from the snapshot, not the history:
