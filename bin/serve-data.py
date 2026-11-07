@@ -24,6 +24,7 @@ rewrites snapshot.json every tick, so a dismissal kept there would be
 overwritten and the closed alert would come back. Routes: GET /dismissed
 (no-store), POST /dismiss {id}, POST /dismiss_all {ids:[...]}.
 """
+import datetime
 import http.server
 import json
 import math
@@ -391,6 +392,46 @@ def survey_state(max_age=5.0, places_db=None):
         _file_survey(value, places_db)
     SURVEY_CACHE.update({"at": now, "value": value})
     return value
+
+
+# Ada 06-Nov-2026 the GPS track for the history page (plan §15k/§15l). A separate reader from
+# read_history() because the gps table's ts is the GPS's own ISO-8601 UTC string, not the epoch
+# float every other table uses - the whole point of it being the fix's clock rather than the
+# router's. Comparing it to a float would silently return nothing.
+def read_track(hours=24, db=None):
+    """Columnar track for the last `hours`, oldest first."""
+    db = DB if db is None else db
+    if not os.path.exists(db):
+        return {"error": "no history database yet"}
+    since = time.time() - hours * 3600
+    since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
+        try:
+            rows = con.execute(
+                "SELECT ts, lat, lon, alt, speed, sats FROM gps WHERE ts >= ? ORDER BY ts ASC",
+                (since_iso,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return {"error": "cannot read the track: %s" % e}
+
+    out = {"hours": hours, "count": len(rows), "ts": [], "lat": [], "lon": [],
+           "alt": [], "speed": [], "sats": []}
+    for ts, lat, lon, alt, speed, sats in rows:
+        try:
+            epoch = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            continue
+        out["ts"].append(epoch)
+        out["lat"].append(lat)
+        out["lon"].append(lon)
+        out["alt"].append(alt)
+        out["speed"].append(speed)
+        out["sats"].append(sats)
+    out["count"] = len(out["ts"])
+    return out
 
 
 def read_places(places_db=None, db=None):
@@ -1095,6 +1136,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/track", "/track.json"):
+            # Ada 06-Nov-2026 the GPS track for the history page (plan §15k).
+            q = urllib.parse.parse_qs(u.query)
+            try:
+                hours = float(q.get("hours", ["24"])[0])
+            except ValueError:
+                hours = 24.0
+            hours = max(0.25, min(24 * 90, hours))
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_track(hours)).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/survey", "/survey.json"):
