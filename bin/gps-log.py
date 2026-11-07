@@ -146,6 +146,11 @@ def nmea_time(secs=NMEA_SECS):
     Ada 07-Nov-2026. Fallback for the blank-QGPSLOC-time case: $GPRMC carries hhmmss.ss and
     ddmmyy from the GNSS itself, so it is the same clock the fix is stamped with and it does not
     depend on the module RTC (AT+CCLK? reads "80/01/06" on this box - unset).
+
+    The device is a FIFO: a bounded read drains the backlog first and only then streams live, so
+    the NEWEST RMC in the buffer is the current one and the first one is history. Measured on
+    Delilah 07-Nov: a 4 s read after a 42 min gap opened on a 42 min-old line and closed on the
+    router's own second. Return the last match, never the first.
     """
     try:
         r = subprocess.run(["timeout", str(secs), "cat", NMEA_DEV],
@@ -154,6 +159,7 @@ def nmea_time(secs=NMEA_SECS):
     except Exception as e:
         log("nmea read failed: %s" % e)
         return None
+    newest = None
     for line in out.splitlines():
         line = line.strip()
         if not (line.startswith("$GPRMC") or line.startswith("$GNRMC")):
@@ -168,10 +174,10 @@ def nmea_time(secs=NMEA_SECS):
         try:
             dd, mm, yy = int(date[0:2]), int(date[2:4]), int(date[4:6])
             hh, mi, ss = int(utc[0:2]), int(utc[2:4]), int(float(utc[4:]))
-            return datetime.datetime(2000 + yy, mm, dd, hh, mi, ss).strftime("%Y-%m-%dT%H:%M:%SZ")
+            newest = datetime.datetime(2000 + yy, mm, dd, hh, mi, ss).strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
             continue
-    return None
+    return newest
 
 
 def haversine_m(a, b, c, d):
@@ -217,7 +223,13 @@ def main():
                 continue
             if not fix["ts"]:
                 # Position without a clock: ask the GNSS's own NMEA. Still no time -> still no row.
-                fix["ts"] = nmea_time()
+                ts = nmea_time()
+                # The device hands back a backlog first, so a short read can close on an old line.
+                # A fallback timestamp that does not move forward is the backlog, not the sky -
+                # drop it rather than stamp a fresh position with an old clock.
+                if ts and last and ts <= last["ts"]:
+                    ts = None
+                fix["ts"] = ts
                 if not fix["ts"]:
                     time.sleep(FAST)
                     continue
