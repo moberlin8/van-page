@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
 # Ada 06-Nov-2026 GPS track logger for Delilah (GL-X3000, RM520N-GL).
+# Ada 07-Nov-2026 parser fix: the timestamp no longer rests on AT+QGPSLOC?'s <utc>/<date> alone.
+#   On 07-Nov those two fields started coming back EMPTY while the position was perfectly good
+#   (+QGPSLOC: ,3603.4219N,07831.3677W,0.8,156.5,3,,0.0,0.0,,14), and the old code read an empty
+#   date as "no fix" -- so ~13.8 h of good fixes (09:22:54Z onward) were dropped without a word.
+#   NMEA RMC on /dev/mhi_LOOPBACK carries the same time from the GNSS itself and is now the
+#   fallback. Two follow-ups are logged on the board, not built here (Matt, 07-Nov-2026):
+#   silent-drop logging and a staleness alert.
 #
 # Why this exists: the dish refuses to hand out its position ("Disabled due to policy"), but the
 # modem's GNSS does not, and a position is what turns a log into a memory - "we were here, and the
 # repeater won". Plan §15k/§15l.
 #
 # Design notes, all of them learned the hard way:
-#  * AT+QGPSLOC? is one request for lat/lon/alt/speed/UTC/satellites. No NMEA parsing, no second
-#    source of truth. NMEA is still on /dev/mhi_LOOPBACK if anyone wants to watch it by hand.
+#  * AT+QGPSLOC? is one request for lat/lon/alt/speed/satellites. The timestamp comes from its
+#    <utc>/<date> when they are present, and from NMEA RMC (nmea_time()) when they are not - that
+#    second path exists only because of the 07-Nov blank-time regression. NMEA is read only on the
+#    fallback, so the common case costs nothing extra; reading /dev/mhi_LOOPBACK consumes that
+#    shared stream, which is safe only because nothing else reads it.
 #  * The timestamp comes from the FIX, not the router's clock. The router's clock drifts while the
 #    link is down; the GPS's does not. That is what makes catch-up after an outage correct.
 #  * No fix means no row. A null position is worse than a gap (Matt, 06-Nov-2026).
@@ -28,12 +38,14 @@ MODEM = ["gl_modem", "-B", "0001:01:00.0", "AT"]
 DIR = "/overlay/gps"
 CUR = os.path.join(DIR, "track.csv")
 LOG = os.path.join(DIR, "gps.log")
+NMEA_DEV = "/dev/mhi_LOOPBACK"
 
 MOVE_KMH = 3.0      # above this the fix is "moving"
 MOVE_M = 50.0       # or if it has moved this far since the last sample
 FAST = 60           # seconds between samples while moving
 SLOW = 300          # seconds between samples while parked
 LOG_MAX = 512 * 1024
+NMEA_SECS = 4       # bounded read of the NMEA stream on the fallback path
 
 
 def log(msg):
@@ -88,7 +100,11 @@ def dm_to_dec(v):
 
 
 def parse_loc(out):
-    """+QGPSLOC: utc,lat,lon,hdop,alt,fix,cog,spkm,spkn,date,nsat -> dict or None."""
+    """+QGPSLOC: utc,lat,lon,hdop,alt,fix,cog,spkm,spkn,date,nsat -> dict or None.
+
+    'ts' may come back None: the <utc>/<date> fields are empty on this module right now, and an
+    empty clock is not the same thing as no position (Ada 07-Nov-2026). The caller fills it in.
+    """
     m = re.search(r"\+QGPSLOC:\s*([^\r\n]+)", out)
     if not m:
         return None
@@ -102,25 +118,60 @@ def parse_loc(out):
     if lat is None or lon is None:
         return None
     # date is ddmmyy, utc is hhmmss.ss
-    if len(date) != 6 or len(utc) < 6:
-        return None
-    try:
-        dd, mm, yy = int(date[0:2]), int(date[2:4]), int(date[4:6])
-        hh, mi, ss = int(utc[0:2]), int(utc[2:4]), int(float(utc[4:]))
-        ts = datetime.datetime(2000 + yy, mm, dd, hh, mi, ss)
-    except ValueError:
-        return None
+    ts = None
+    if len(date) == 6 and len(utc) >= 6:
+        try:
+            dd, mm, yy = int(date[0:2]), int(date[2:4]), int(date[4:6])
+            hh, mi, ss = int(utc[0:2]), int(utc[2:4]), int(float(utc[4:]))
+            ts = datetime.datetime(2000 + yy, mm, dd, hh, mi, ss).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            ts = None
+
     def fnum(x):
         try:
             return float(x)
         except (TypeError, ValueError):
             return None
     return {
-        "ts": ts.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "ts": ts,
         "lat": lat, "lon": lon,
         "alt": fnum(alt), "speed": fnum(spkm), "sats": fnum(nsat),
         "hdop": fnum(hdop), "fix": int(fix) if fix.isdigit() else None,
     }
+
+
+def nmea_time(secs=NMEA_SECS):
+    """UTC timestamp from the GNSS's own NMEA stream, or None.
+
+    Ada 07-Nov-2026. Fallback for the blank-QGPSLOC-time case: $GPRMC carries hhmmss.ss and
+    ddmmyy from the GNSS itself, so it is the same clock the fix is stamped with and it does not
+    depend on the module RTC (AT+CCLK? reads "80/01/06" on this box - unset).
+    """
+    try:
+        r = subprocess.run(["timeout", str(secs), "cat", NMEA_DEV],
+                           capture_output=True, text=True, timeout=secs + 3)
+        out = r.stdout or ""
+    except Exception as e:
+        log("nmea read failed: %s" % e)
+        return None
+    for line in out.splitlines():
+        line = line.strip()
+        if not (line.startswith("$GPRMC") or line.startswith("$GNRMC")):
+            continue
+        f = line.split(",")
+        # $GPRMC,231416.00,A,3603.421860,N,07831.367703,W,0.0,,071126,9.5,W,A,V
+        if len(f) < 10 or f[2] != "A":
+            continue
+        utc, date = f[1], f[9]
+        if len(date) != 6 or len(utc) < 6:
+            continue
+        try:
+            dd, mm, yy = int(date[0:2]), int(date[2:4]), int(date[4:6])
+            hh, mi, ss = int(utc[0:2]), int(utc[2:4]), int(float(utc[4:]))
+            return datetime.datetime(2000 + yy, mm, dd, hh, mi, ss).strftime("%Y-%m-%dT%H:%M:%SZ")
+        except ValueError:
+            continue
+    return None
 
 
 def haversine_m(a, b, c, d):
@@ -164,6 +215,12 @@ def main():
                 # No fix is normal: cold start, indoors, under cover. Say nothing, write nothing.
                 time.sleep(FAST)
                 continue
+            if not fix["ts"]:
+                # Position without a clock: ask the GNSS's own NMEA. Still no time -> still no row.
+                fix["ts"] = nmea_time()
+                if not fix["ts"]:
+                    time.sleep(FAST)
+                    continue
             moving = (fix["speed"] or 0) > MOVE_KMH
             if not moving and last:
                 moving = haversine_m(last["lat"], last["lon"], fix["lat"], fix["lon"]) > MOVE_M
