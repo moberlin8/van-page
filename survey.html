@@ -1,0 +1,147 @@
+<!doctype html>
+<!-- Ada 06-Nov-2026 the survey report (plan §15j). One page: the latest run in full, then the
+     history. The tile on the main page says who won; this says why, and what it cost. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>van &middot; survey report</title>
+<style>
+:root{--bg:#0f172a;--panel:rgba(30,41,59,.8);--line:rgba(148,163,184,.16);--title:#e2e8f0;
+  --dim:#cbd5e1;--faint:#94a3b8;--ok:#34d399;--warn:#fbbf24;--bad:#fb7185;--info:#38bdf8}
+*{box-sizing:border-box}
+body{margin:0;padding:2rem 1.2rem 4rem;background:var(--bg);color:var(--dim);
+  font-family:"Plex Mono",ui-monospace,Menlo,Consolas,monospace;font-size:15px;line-height:1.5}
+.wrap{max-width:1000px;margin:0 auto}
+h1{font-size:1.6rem;color:var(--title);margin:0 0 .3rem;letter-spacing:.04em}
+h2{font-size:1.05rem;color:var(--title);margin:2.2rem 0 .7rem;text-transform:uppercase;
+  letter-spacing:.12em}
+.muted{color:var(--faint)}
+.card{background:var(--panel);border-radius:6px;padding:1rem 1.2rem;margin:0 0 1rem}
+table{width:100%;border-collapse:collapse;font-size:.92rem}
+th{text-align:left;color:var(--faint);font-weight:500;text-transform:uppercase;
+  letter-spacing:.08em;font-size:.76rem;padding:.4rem .5rem;border-bottom:1px solid var(--line)}
+td{padding:.45rem .5rem;border-bottom:1px solid var(--line);vertical-align:top}
+tr:last-child td{border-bottom:0}
+.ok{color:var(--ok)}.bad{color:var(--bad)}.warn{color:var(--warn)}
+.win{font-size:1.2rem;color:var(--ok);margin:.2rem 0 .6rem}
+a{color:var(--info);text-decoration:none}
+a:hover{text-decoration:underline}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>survey report</h1>
+  <p class="muted" id="sub">loading&hellip;</p>
+  <div id="out"></div>
+  <p class="muted" style="margin-top:2.5rem"><a href="/van/index.html">&larr; back to the van page</a></p>
+</div>
+<script>
+const SURVEYS_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/surveys";
+const $ = (id) => document.getElementById(id);
+const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g, (c) => (
+  { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+const mb = (b) => b == null ? "&mdash;" : (b / 1e6).toFixed(2) + " MB/s";
+const ms = (v) => v == null ? "&mdash;" : Math.round(v) + " ms";
+const pct = (v) => v == null ? "&mdash;" : v + " %";
+const when = (ts) => {
+  if (!ts) return "&mdash;";
+  const d = new Date(ts);
+  return isNaN(d) ? esc(ts) : d.toLocaleString("en-US",
+    { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" });
+};
+
+function pathTable(run) {
+  const rows = (run.results || []).map((r) => "<tr>"
+    + "<td>" + esc(r.label) + "</td>"
+    + '<td class="' + (r.ok ? "ok" : "bad") + '">'
+    + (r.ok ? "usable" : esc(r.reason || "failed")) + "</td>"
+    + "<td>" + mb(r.speed_bps) + "</td><td>" + ms(r.rtt_ms) + "</td>"
+    + "<td>" + pct(r.loss_pct) + "</td>"
+    + "<td>" + (r.id === run.winner ? '<span class="ok">won</span>' : "") + "</td></tr>").join("");
+  return "<table><thead><tr><th>path</th><th>result</th><th>throughput</th><th>latency</th>"
+    + "<th>loss</th><th></th></tr></thead><tbody>" + rows + "</tbody></table>";
+}
+
+function sweepTable(run) {
+  const s = run.swept || [];
+  if (!s.length) {
+    return '<p class="muted">No other configured network was visible, so nothing was switched.</p>';
+  }
+  const rows = s.map((r) => "<tr>"
+    + "<td>" + esc(r.ssid) + "</td>"
+    + "<td>" + (r.signal == null ? "&mdash;" : r.signal + " dBm") + "</td>"
+    + "<td>" + (r.channel == null ? "&mdash;" : "ch" + r.channel + " " + esc(r.band || "")) + "</td>"
+    + '<td class="' + (r.ok ? "ok" : "bad") + '">'
+    + (r.ok ? "usable" : esc(r.reason || "failed")) + "</td>"
+    + "<td>" + mb(r.speed_bps) + "</td><td>" + ms(r.rtt_ms) + "</td></tr>").join("");
+  return "<table><thead><tr><th>ssid</th><th>signal</th><th>channel</th><th>result</th>"
+    + "<th>throughput</th><th>latency</th></tr></thead><tbody>" + rows + "</tbody></table>";
+}
+
+function switchLine(run) {
+  const sw = run.switch || {};
+  if (sw.switched) {
+    const b = sw.before || {}, a = sw.after || {};
+    const parts = Object.keys(a).map((k) => k + " " + (b[k] == null ? "?" : b[k]) + "&rarr;" + a[k]);
+    return '<span class="ok">switched</span> &middot; ' + esc(parts.join(", "));
+  }
+  return '<span class="muted">' + esc(sw.reason || "no change") + "</span>";
+}
+
+function render(data) {
+  const runs = data.surveys || [];
+  if (!runs.length) {
+    $("sub").textContent = "no surveys yet";
+    $("out").innerHTML = '<div class="card"><p class="muted">Run one from the location tile on '
+      + '<a href="/van/index.html">the van page</a>.</p></div>';
+    return;
+  }
+  const r = runs[0];
+  $("sub").innerHTML = esc(r.name || "unnamed place") + " &middot; " + when(r.ts)
+    + " &middot; " + (r.cost_bytes ? (r.cost_bytes / 1e6).toFixed(1) + " MB of data" : "cost unknown");
+
+  let html = '<div class="card">';
+  html += '<div class="win">' + (r.winner ? esc(r.winner) + " won" : "nothing usable") + "</div>";
+  html += '<p class="muted" style="margin:0 0 .8rem">' + switchLine(r) + "</p>";
+  html += pathTable(r);
+  html += "</div>";
+
+  html += "<h2>repeater sweep</h2>";
+  html += '<div class="card"><p class="muted" style="margin:0 0 .7rem">'
+    + "Configured: " + esc((r.configured || []).join(", ") || "none")
+    + " &middot; visible: " + esc((r.visible || []).join(", ") || "none")
+    + "</p>" + sweepTable(r) + "</div>";
+
+  if (runs.length > 1) {
+    html += "<h2>earlier runs</h2><div class=\"card\"><table><thead><tr><th>when</th>"
+      + "<th>place</th><th>winner</th><th>data</th></tr></thead><tbody>";
+    for (const x of runs.slice(1)) {
+      html += "<tr><td>" + when(x.ts) + "</td><td>" + esc(x.name || "&mdash;") + "</td>"
+        + "<td>" + esc(x.winner || "&mdash;") + "</td>"
+        + "<td>" + (x.cost_bytes ? (x.cost_bytes / 1e6).toFixed(1) + " MB" : "&mdash;")
+        + "</td></tr>";
+    }
+    html += "</tbody></table></div>";
+  }
+  $("out").innerHTML = html;
+}
+
+async function load() {
+  try {
+    const r = await fetch(SURVEYS_URL + "?limit=20&t=" + Date.now(), { cache: "no-store" });
+    const d = await r.json();
+    if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+    render(d);
+  } catch (e) {
+    $("sub").textContent = "cannot read the survey history";
+    $("out").innerHTML = '<div class="card"><p class="bad">' + esc(String(e).slice(0, 200))
+      + "</p></div>";
+  }
+}
+
+load();
+setInterval(load, 30000);
+</script>
+</body>
+</html>

@@ -462,6 +462,9 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 #place-tile button:active{transform:translateY(1px)}
 #place-tile button:disabled{opacity:.45;cursor:default}
 #place-tile #place-msg{color:var(--faint);line-height:1.25;display:block;text-align:left}
+#place-tile #survey-state{color:var(--info);text-decoration:none;line-height:1.25;display:block;
+  text-align:left}
+#place-tile #survey-state:hover{text-decoration:underline}
 #place-tile #place-msg.ok{color:var(--ok)}
 #place-tile #place-msg.bad{color:var(--bad)}
 .csquare .r{display:flex;align-items:baseline;justify-content:space-between;
@@ -1426,7 +1429,10 @@ function routerSection(r) {
       </div>
     </div>
     <div class="r"><span class="v small" id="place-msg"></span></div>
-    <div class="r"><span class="v small" id="survey-state">&mdash;</span></div>
+    <!-- Ada 06-Nov-2026 the state line is the link to the report: the tile says who won, the
+         report says why. textContent is set on the anchor, so the href survives every update. -->
+    <div class="r"><a class="v small" id="survey-state" href="/van/survey.html"
+         title="survey report">&mdash;</a></div>
   </div>
     <!-- Ada 06-Nov-2026 first tile in the router section, and renamed "WAN Connection"
          (Matt): it answers "what is carrying the traffic", which is the first question
