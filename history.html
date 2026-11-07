@@ -1286,7 +1286,108 @@ function tputBox(unit, down, up, fmt) {
     </div>`;
 }
 
-function drawHistory(h) {
+
+// Ada 06-Nov-2026 the position panel (plan §15k/§15l). A track is a shape, not a time series, so it
+// is drawn as an SVG path rather than through uPlot: the question "where have we been" is answered
+// by the shape, and a lat/lon pair of lines over time answers nothing.
+const TRACK_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/track";
+const PLACES_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/places";
+
+function haversineM(a, b, c, d) {
+  const R = 6371000, p1 = a * Math.PI / 180, p2 = c * Math.PI / 180;
+  const dp = p2 - p1, dl = (d - b) * Math.PI / 180;
+  const h = Math.sin(dp / 2) ** 2 + Math.cos(p1) * Math.cos(p2) * Math.sin(dl / 2) ** 2;
+  return 2 * R * Math.asin(Math.sqrt(h));
+}
+
+function trackPanel(t, places) {
+  const lat = t.lat || [], lon = t.lon || [], ts = t.ts || [];
+  if (!lat.length) {
+    return '<div class="chart"><h3>position</h3><p class="muted">'
+      + esc(t.error || "no fixes in this window") + "</p></div>";
+  }
+  const W = 900, H = 420, PAD = 46;
+  const midlat = lat.reduce((a, b) => a + b, 0) / lat.length;
+  const k = Math.cos(midlat * Math.PI / 180);
+  const xs = lon.map((v) => v * k), ys = lat;
+  const x0 = Math.min.apply(null, xs), x1 = Math.max.apply(null, xs);
+  const y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
+  const spanX = x1 - x0, spanY = y1 - y0;
+
+  let dist = 0;
+  for (let i = 1; i < lat.length; i++) dist += haversineM(lat[i - 1], lon[i - 1], lat[i], lon[i]);
+  const still = dist < 50;
+
+  // Ada 06-Nov-2026 a floor on the scale. Fitting the box to the data magnifies a parked van's
+  // centimetre-level jitter into a line across the panel, which reads as a journey that never
+  // happened. Below ~220 m the track is drawn at a fixed scale, centred, and called what it is.
+  const MIN_SPAN = 0.002;
+  const s = Math.min((W - 2 * PAD) / Math.max(spanX, MIN_SPAN),
+                     (H - 2 * PAD) / Math.max(spanY, MIN_SPAN));
+  const cx = (x0 + x1) / 2, cy = (y0 + y1) / 2;
+  const px = (v) => W / 2 + (v - cx) * s;
+  const py = (v) => H / 2 - (v - cy) * s;
+
+  const pts = lat.map((v, i) => px(xs[i]).toFixed(1) + "," + py(ys[i]).toFixed(1));
+  const path = pts.length > 1 ? '<polyline points="' + pts.join(" ") + '" fill="none" '
+    + 'stroke="var(--ok)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round" '
+    + 'opacity="0.85"/>' : "";
+
+  // Places that fall inside this window's box, so the track is labelled with names rather than
+  // coordinates. A place outside the box is simply not drawn - the box is the track's, not the world's.
+  let marks = "";
+  for (const p of (places || [])) {
+    if (p.lat == null || p.lon == null) continue;
+    const mx = px(p.lon * k), my = py(p.lat);
+    if (mx < 0 || mx > W || my < 0 || my > H) continue;
+    marks += '<circle cx="' + mx.toFixed(1) + '" cy="' + my.toFixed(1) + '" r="5" '
+      + 'fill="none" stroke="var(--info)" stroke-width="2"/>'
+      + '<text x="' + (mx + 9).toFixed(1) + '" y="' + (my + 5).toFixed(1) + '" '
+      + 'fill="var(--info)" font-size="15" font-family="Plex Mono,monospace">'
+      + esc(p.name) + "</text>";
+  }
+
+  const first = ts.length ? new Date(ts[0] * 1000) : null;
+  const last = ts.length ? new Date(ts[ts.length - 1] * 1000) : null;
+  const fmtT = (d) => d ? d.toLocaleString("en-US", { month: "short", day: "numeric",
+    hour: "2-digit", minute: "2-digit" }) : "\u2014";
+  const km = dist / 1000;
+
+  return '<div class="chart">'
+    + '<h3>position</h3>'
+    + '<p class="muted" style="margin:-.3rem 0 .8rem">'
+    + esc(t.count + (t.count === 1 ? " fix" : " fixes") + " over " + Math.round(t.hours) + " h")
+    + " &middot; " + (still ? "no movement" : km.toFixed(2) + " km travelled")
+    + " &middot; " + esc(fmtT(first)) + " &rarr; " + esc(fmtT(last))
+    + "</p>"
+    + '<svg viewBox="0 0 ' + W + " " + H + '" preserveAspectRatio="xMidYMid meet" '
+    + 'style="width:100%;height:auto;display:block;background:rgba(255,255,255,.03);'
+    + 'border-radius:6px">'
+    + path
+    + (pts.length ? '<circle cx="' + pts[0].split(",")[0] + '" cy="' + pts[0].split(",")[1]
+        + '" r="6" fill="var(--ok)"/>' : "")
+    + (pts.length > 1 ? '<circle cx="' + pts[pts.length - 1].split(",")[0] + '" cy="'
+        + pts[pts.length - 1].split(",")[1] + '" r="6" fill="var(--warn)"/>' : "")
+    + marks
+    + "</svg>"
+    + '<p class="muted" style="font-size:.95rem;margin:.6rem 0 0">'
+    + "green = first fix, amber = last, blue rings = named places</p>"
+    + "</div>";
+}
+
+function placesPanel(places) {
+  if (!places || !places.length) return "";
+  const rows = places.map((p) => "<tr><td>" + esc(p.name) + "</td><td>" + fmtInt(p.visits)
+    + "</td><td>" + fmtInt(p.surveys) + "</td><td>"
+    + esc(p.last_ts ? new Date(p.last_ts).toLocaleString("en-US",
+        { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "\u2014")
+    + "</td></tr>").join("");
+  return '<div class="chart"><h3>places</h3>'
+    + '<table class="stats"><thead><tr><th>name</th><th>visits</th><th>surveys</th>'
+    + "<th>last seen</th></tr></thead><tbody>" + rows + "</tbody></table></div>";
+}
+
+function drawHistory(h, track, places) {
   const ts = h.ts || [];
   if (!ts.length) {
     $("history").innerHTML = '<h2>history</h2><p class="muted">'
@@ -1299,6 +1400,11 @@ function drawHistory(h) {
   html.push('<p class="muted" style="font-size:1.05rem;margin:-.5rem 0 1.4rem">'
     + esc(h.count + " samples over " + Math.round(h.hours) + " h")
     + ' &middot; one row a minute from <code>/srv/van/data/van.db</code></p>');
+
+  // Ada 06-Nov-2026 where we have been, first: it is the most human question this page can answer,
+  // and the charts below are about the link rather than the place.
+  html.push(trackPanel(track || {}, places || []));
+  html.push(placesPanel(places || []));
 
   // ---- obstruction over time: first panel in the section ---------------------
   // Ada 24-Oct-2026 the sky view section is gone (Matt). The trend and its table
@@ -1425,10 +1531,19 @@ async function loadHistory() {
     + "&fields=downlink_bps,uplink_bps,ping_drop,ping_latency,frac_obstruct,latency_p90"
     + "&t=" + Date.now();
   try {
-    const r = await fetch(url, { cache: "no-store" });
-    const h = await r.json();
-    if (!r.ok) throw new Error(h.error || ("HTTP " + r.status));
-    drawHistory(h);
+    // Ada 06-Nov-2026 the track and the place registry come from their own endpoints; a failure in
+    // either must not take the charts down with it, so they are fetched alongside and defaulted.
+    const [hr, tr, pr] = await Promise.all([
+      fetch(url, { cache: "no-store" }),
+      fetch(TRACK_URL + "?hours=" + HISTORY_HOURS + "&t=" + Date.now(), { cache: "no-store" }),
+      fetch(PLACES_URL + "?t=" + Date.now(), { cache: "no-store" }),
+    ]);
+    const h = await hr.json();
+    if (!hr.ok) throw new Error(h.error || ("HTTP " + hr.status));
+    let track = {}, places = [];
+    try { track = await tr.json(); } catch (e) { track = {}; }
+    try { const pj = await pr.json(); places = pj.places || []; } catch (e) { places = []; }
+    drawHistory(h, track, places);
   } catch (e) {
     $("history").innerHTML = '<h2>history</h2><p class="muted">'
       + esc(String(e).slice(0, 200)) + "</p>";
