@@ -434,6 +434,34 @@ def read_track(hours=24, db=None):
     return out
 
 
+# Ada 06-Nov-2026 the survey history for the report page (plan §15j). The runs are filed in
+# places.db as they finish, so this is a read of what already happened rather than a live query.
+def read_surveys(limit=20, places_db=None):
+    try:
+        con = places_con(places_db)
+        try:
+            rows = con.execute(
+                "SELECT s.id, s.ts, s.run_id, p.name, s.results FROM survey s"
+                " LEFT JOIN place p ON p.id = s.place_id ORDER BY s.id DESC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return {"error": "cannot read surveys: %s" % e}
+    out = []
+    for sid, ts, run_id, name, results in rows:
+        try:
+            d = json.loads(results or "{}")
+        except ValueError:
+            d = {}
+        out.append({"id": sid, "ts": ts, "run_id": run_id, "name": name,
+                    "winner": d.get("winner_label"), "state": d.get("state"),
+                    "results": d.get("results") or [], "swept": d.get("swept") or [],
+                    "switch": d.get("switch") or {}, "cost_bytes": d.get("cost_bytes"),
+                    "configured": d.get("configured") or [], "visible": d.get("visible") or []})
+    return {"surveys": out}
+
+
 def read_places(places_db=None, db=None):
     """Every place with its visit and survey counts, newest visit first."""
     try:
@@ -1136,6 +1164,19 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/surveys", "/surveys.json"):
+            # Ada 06-Nov-2026 the survey history (plan §15j).
+            q = urllib.parse.parse_qs(u.query)
+            try:
+                limit = int(q.get("limit", ["20"])[0])
+            except ValueError:
+                limit = 20
+            limit = max(1, min(200, limit))
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_surveys(limit)).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/track", "/track.json"):
