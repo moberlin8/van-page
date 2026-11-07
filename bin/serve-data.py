@@ -29,6 +29,7 @@ import json
 import math
 import os
 import posixpath
+import shlex
 import subprocess
 import socketserver
 import sqlite3
@@ -130,10 +131,19 @@ CREATE TABLE IF NOT EXISTS survey (
     id       INTEGER PRIMARY KEY AUTOINCREMENT,
     ts       TEXT,
     place_id INTEGER,
-    results  TEXT
+    results  TEXT,
+    run_id   TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_survey_place ON survey(place_id);
 """
+
+# Ada 06-Nov-2026 the survey table gained run_id after it already existed in the live file, so the
+# column is added rather than assumed. The unique index is what makes filing a run idempotent: the
+# result is read on every page poll, and only the first read may write it.
+SURVEY_MIGRATIONS = (
+    "ALTER TABLE survey ADD COLUMN run_id TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_run ON survey(run_id)",
+)
 
 
 def haversine_m(lat1, lon1, lat2, lon2):
@@ -148,6 +158,12 @@ def haversine_m(lat1, lon1, lat2, lon2):
 def places_con(path=None):
     con = sqlite3.connect(path or PLACES_DB, timeout=10)
     con.executescript(PLACES_SCHEMA)
+    for stmt in SURVEY_MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except sqlite3.Error:
+            pass  # already there
+    con.commit()
     return con
 
 
@@ -171,7 +187,7 @@ def latest_fix(db=None):
     return {"ts": row[0], "lat": row[1], "lon": row[2], "alt": row[3], "sats": row[4], "fix": row[5]}
 
 
-def place_mark(name, now=None, db=None, places_db=None):
+def place_mark(name, now=None, db=None, places_db=None, source="mark"):
     """(http status, body) for POST /place/mark.
 
     The rules, all of them Matt's (06-Nov-2026):
@@ -224,7 +240,7 @@ def place_mark(name, now=None, db=None, places_db=None):
                 "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
                 " VALUES (?,?,?,?,?,?,?,?)",
                 (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"],
-                 fix["fix"], "mark"))
+                 fix["fix"], source))
             con.execute("UPDATE place SET last_ts = ? WHERE id = ?", (fix["ts"], place_id))
             con.commit()
             return 200, {"ok": True, "place": {"id": place_id, "name": stored},
@@ -249,7 +265,7 @@ def place_mark(name, now=None, db=None, places_db=None):
         con.execute(
             "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
             " VALUES (?,?,?,?,?,?,?,?)",
-            (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"], fix["fix"], "mark"))
+            (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"], fix["fix"], source))
         con.commit()
         body = {"ok": True, "place": {"id": place_id, "name": name},
                 "visit_ts": fix["ts"], "new_place": True}
@@ -258,6 +274,123 @@ def place_mark(name, now=None, db=None, places_db=None):
         return 201, body
     finally:
         con.close()
+
+
+# Ada 06-Nov-2026 the WAN survey (plan §15j). The engine runs on Delilah, detached, because its
+# last step can drop the link that started it; this server only starts it and reads the answer.
+SURVEY_LAST = "/overlay/survey/last.json"
+SURVEY_SCRIPT = "/overlay/survey/wan-survey.py"
+SURVEY_CACHE = {"at": 0.0, "value": None}
+
+
+def _delilah(cmd, timeout=20):
+    """Run one command on Delilah.
+
+    -F /dev/null on purpose: this service runs in a systemd mount namespace (ReadOnlyPaths on
+    /srv/van/data), and in that namespace ssh refuses the host's own /etc/ssh/ssh_config.d include
+    with "Bad owner or permissions" even though the file is root:root 644. The include only sets
+    keepalive options, which a 15-second control command does not need, so the system config is
+    skipped rather than fought with.
+    """
+    return subprocess.run(["ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+                           "-o", "ConnectTimeout=8", "root@delilah", cmd],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def ensure_place(name, places_db=None):
+    """The id for `name`, creating the place if it is new. No visit: a survey needs no fix."""
+    con = places_con(places_db)
+    try:
+        row = con.execute("SELECT id FROM place WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+        if row:
+            return row[0]
+        cur = con.execute("INSERT INTO place (name, first_ts, last_ts) VALUES (?,?,?)",
+                          (name, None, None))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def start_survey(name, places_db=None, db=None):
+    """(status, body) for POST /survey/run: file the place, then launch the engine detached."""
+    name = (name or "").strip()
+    if not name:
+        return 400, {"error": "name required"}
+    if len(name) > 64:
+        return 400, {"error": "name too long (64 characters max)"}
+
+    # The place exists from the moment the survey is asked for. A survey does not need a fix, so a
+    # missing one is not a reason to refuse - but a name that belongs to a place far away is.
+    status, body = place_mark(name, db=db, places_db=places_db, source="survey")
+    if status == 409 and body.get("error") == "too far":
+        return status, body
+    if status not in (200, 201):
+        ensure_place(name, places_db)
+
+    run_id = "%d" % int(time.time())
+    # start-stop-daemon, not "setsid nohup ... &": this router has neither setsid nor nohup, and a
+    # backgrounded command in a login shell returns 0 whether or not it started - which is how a
+    # survey that never ran looked like a survey that had. -b detaches, -m writes the pidfile, and
+    # the exit status is the launcher's, so a failure is a failure.
+    cmd = ("rm -f /tmp/wan-survey.pid; start-stop-daemon -S -b -m -p /tmp/wan-survey.pid "
+           "-x /usr/bin/python3 -- %s %s %s"
+           % (SURVEY_SCRIPT, shlex.quote(name), shlex.quote(run_id)))
+    try:
+        r = _delilah(cmd, timeout=25)
+    except Exception as e:
+        return 503, {"error": "cannot reach Delilah: %s" % e}
+    if r.returncode != 0:
+        return 503, {"error": "cannot start the survey: %s" % (r.stderr or "").strip()[:200]}
+    SURVEY_CACHE.update({"at": 0.0, "value": None})
+    return 202, {"ok": True, "run_id": run_id, "name": name, "state": "running"}
+
+
+def _file_survey(run, places_db=None):
+    """Store a finished run against its place. Idempotent: run_id is unique."""
+    run_id = run.get("run_id")
+    name = (run.get("name") or "").strip()
+    if not run_id or not name:
+        return
+    try:
+        con = places_con(places_db)
+        try:
+            row = con.execute("SELECT id FROM place WHERE name = ? COLLATE NOCASE",
+                              (name,)).fetchone()
+            con.execute("INSERT OR IGNORE INTO survey (ts, place_id, results, run_id)"
+                        " VALUES (?,?,?,?)",
+                        (run.get("finished") or run.get("updated"),
+                         row[0] if row else None, json.dumps(run), run_id))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+
+
+def survey_state(max_age=5.0, places_db=None):
+    """The latest run, read from Delilah. Cached briefly: the page polls every 15s.
+
+    A read that fails keeps the last answer and marks it stale, because during a survey the router
+    is expected to be unreachable for a moment - that is the switch, not a fault.
+    """
+    now = time.time()
+    if max_age and SURVEY_CACHE["value"] is not None and now - SURVEY_CACHE["at"] < max_age:
+        return SURVEY_CACHE["value"]
+    try:
+        r = _delilah("cat " + SURVEY_LAST, timeout=15)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise RuntimeError((r.stderr or "no output").strip()[:200])
+        value = json.loads(r.stdout)
+    except Exception as e:
+        prev = SURVEY_CACHE["value"]
+        value = dict(prev) if prev else {"state": "unknown"}
+        value["stale"] = True
+        value["error"] = str(e)[:200]
+    if value.get("state") == "done":
+        _file_survey(value, places_db)
+    SURVEY_CACHE.update({"at": now, "value": value})
+    return value
 
 
 def read_places(places_db=None, db=None):
@@ -893,6 +1026,29 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                           json.dumps(body).encode("utf-8"))
             return
 
+        # Ada 06-Nov-2026 start a WAN survey (plan §15j). Manual only: nothing here runs on a timer,
+        # and the engine is launched detached because its last step can drop the link.
+        if path == "/survey/run":
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "bad json"}).encode("utf-8"))
+                return
+            try:
+                status, body = start_survey(payload.get("name"))
+            except sqlite3.Error as e:
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write places: %s" % e}).encode("utf-8"))
+                return
+            self.no_store = True
+            self._respond(status, "application/json; charset=utf-8",
+                          json.dumps(body).encode("utf-8"))
+            return
+
         if path == "/history":
             self._respond(405, "application/json; charset=utf-8",
                           json.dumps({"error": "method not allowed"}).encode("utf-8"))
@@ -939,6 +1095,13 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/survey", "/survey.json"):
+            # Ada 06-Nov-2026 the latest survey run, live from Delilah (plan §15j).
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(survey_state()).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/places", "/places.json"):
