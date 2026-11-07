@@ -22,6 +22,7 @@ Design notes:
 """
 import json
 import os
+import shlex
 import subprocess
 import sys
 import time
@@ -178,6 +179,22 @@ CREATE TABLE IF NOT EXISTS router (
     apn           TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_router_ts ON router(ts);
+-- Ada 06-Nov-2026 the GPS track, drained from Delilah's own log (plan §15k/§15l). `ts` is the
+-- GPS's UTC time, not the router's clock, so a sample stays correct even if the router's clock
+-- drifted while the link was down. It is the primary key, which is what makes a re-drain idempotent.
+CREATE TABLE IF NOT EXISTS gps (
+    ts     TEXT PRIMARY KEY,
+    lat    REAL,
+    lon    REAL,
+    alt    REAL,
+    speed  REAL,
+    sats   INTEGER,
+    hdop   REAL,
+    fix    INTEGER
+);
+-- Ada 06-Nov-2026 places live in their own file (var/places.db), not here: van.db is the poller's
+-- and van-data.service reads it with ReadOnlyPaths, so the page could never write a mark into it.
+-- The track above is the poller's; the marks are the server's (plan §15l).
 CREATE TABLE IF NOT EXISTS sim (
     ts           REAL PRIMARY KEY,
     slot         INTEGER,
@@ -355,8 +372,14 @@ print(json.dumps(out))
     return json.loads(r.stdout.strip().splitlines()[-1])
 
 
-def poll_delilah():
-    """Return a dict of Delilah readings, or raise."""
+def poll_delilah(cursor=None):
+    """Return a dict of Delilah readings, or raise.
+
+    `cursor` is the newest GPS timestamp already stored here. The probe returns only rows after it,
+    so an ordinary tick carries nothing and a catch-up after an outage carries the backlog in one
+    reply (plan §15l). Passing it as an argument rather than re-reading the whole file is what keeps
+    a 15-second poll cheap.
+    """
     # pull the probe over first so the local copy is never stale
     subprocess.run(
         ["scp", "-O", "-q", "-o", "BatchMode=yes",
@@ -364,9 +387,12 @@ def poll_delilah():
          DELILAH_HOST + ":" + DELILAH_SCRIPT],
         capture_output=True, text=True, timeout=40,
     )
+    cmd = "sh " + DELILAH_SCRIPT
+    if cursor:
+        cmd += " " + shlex.quote(str(cursor))
     r = subprocess.run(
         ["ssh", "-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=no",
-         DELILAH_HOST, "sh " + DELILAH_SCRIPT],
+         DELILAH_HOST, cmd],
         capture_output=True, text=True, timeout=DELILAH_TIMEOUT,
     )
     if r.returncode != 0:
@@ -493,6 +519,13 @@ def main():
     prev_sim = snap.get("sim") or {}
     prev_dish_stale = snap.get("dish_stale", False)
 
+    # Ada 06-Nov-2026 the GPS cursor: the newest sample we already hold. The probe returns only what
+    # is newer, so a normal tick is empty and a catch-up after an outage arrives in one reply.
+    try:
+        _gps_cursor = con.execute("SELECT MAX(ts) FROM gps").fetchone()[0]
+    except Exception:
+        _gps_cursor = None
+
     # ---- dish -----------------------------------------------------------------
     try:
         d = poll_dish()
@@ -604,7 +637,7 @@ def main():
 
     # ---- delilah --------------------------------------------------------------
     try:
-        r = poll_delilah()
+        r = poll_delilah(_gps_cursor)
         snap["delilah"] = r
         snap["delilah_ts"] = num(r.get("collected_at") and None) or now
         snap["delilah_stale"] = False
@@ -663,6 +696,27 @@ def main():
         except Exception as e:
             snap["router_error"] = str(e)[:200]
             log("router history FAILED: %s" % e)
+
+        # ---- GPS track drain (plan §15k/§15l) ------------------------------------
+        # Ada 06-Nov-2026 Delilah logs the track locally whether or not the link is up, so this is
+        # the catch-up: whatever the router has that we do not, in one pass. `ts` is the primary key,
+        # so a re-drain of the same rows is a no-op rather than a duplicate.
+        try:
+            _rows = r.get("gps") or []
+            _n = 0
+            for _g in _rows:
+                if not isinstance(_g, list) or len(_g) < 8:
+                    continue
+                con.execute(
+                    "INSERT OR IGNORE INTO gps (ts, lat, lon, alt, speed, sats, hdop, fix)"
+                    " VALUES (?,?,?,?,?,?,?,?)", tuple(_g[:8]))
+                _n += 1
+            con.commit()
+            if _n:
+                log("gps drained %d row(s), newest %s" % (_n, _rows[-1][0]))
+        except Exception as e:
+            snap["gps_error"] = str(e)[:200]
+            log("gps drain FAILED: %s" % e)
     except Exception as e:
         snap["delilah_stale"] = True
         snap["delilah_error"] = str(e)[:300]

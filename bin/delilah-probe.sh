@@ -376,4 +376,17 @@ printf ','
 s sim2_reset_day "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_day)"
 printf ','
 s sim2_reset_hour "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_hour)"
+printf ','
+# ---- Ada 06-Nov-2026 GPS track drain (plan §15k/§15l) -------------------------
+# $1 is the newest timestamp harlan already holds; everything after it is new. Bounded at 5000 rows
+# so a long outage cannot produce an unbounded reply - and 5000 rows is 83 hours of driving at the
+# 60s moving cadence, far more than any real gap. Empty fields become null rather than a bare comma,
+# because a malformed array would fail the whole poll rather than just the track.
+printf '"gps":['
+awk -F, -v t="${1:-}" '
+function j(v) { return (v == "" ? "null" : v) }
+NF >= 8 && $1 > t && n < 5000 {
+	printf "%s[\"%s\",%s,%s,%s,%s,%s,%s,%s]", (n++ ? "," : ""), $1, j($2), j($3), j($4), j($5), j($6), j($7), j($8)
+}' /overlay/gps/track*.csv 2>/dev/null
+printf ']'
 printf '}\n'

@@ -26,6 +26,7 @@ overwritten and the closed alert would come back. Routes: GET /dismissed
 """
 import http.server
 import json
+import math
 import os
 import posixpath
 import subprocess
@@ -92,6 +93,196 @@ PORT = 8891
 # on the poller's data stays exactly as it was.
 DISMISSED = "/home/ada/van/var/dismissed.json"
 DISMISS_WINDOW_S = 26 * 3600
+
+# Ada 06-Nov-2026 places: a name, the visits to it, and the surveys run there (plan §15l).
+#
+# Why a separate database. van.db belongs to the poller and van-data.service reads it with
+# ReadOnlyPaths=/srv/van/data on purpose, so this server cannot write a mark into it - and should
+# not be able to. The marks are the server's own state, so they live with the other writable state
+# in var/, next to dismissed.json. The GPS track stays in van.db and is read here read-only.
+PLACES_DB = "/home/ada/van/var/places.db"
+
+# Matt's threshold, 06-Nov-2026: 3/4 mile. A name that already exists but whose fix is further than
+# this from every visit to that place is an ERROR, not a new place - "same name, different town" is
+# the mistake this exists to catch.
+PLACE_RADIUS_M = 1207.0
+
+PLACES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS place (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT UNIQUE NOT NULL,
+    first_ts TEXT,
+    last_ts  TEXT
+);
+CREATE TABLE IF NOT EXISTS visit (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT,
+    place_id INTEGER,
+    lat      REAL,
+    lon      REAL,
+    alt      REAL,
+    sats     INTEGER,
+    fix      INTEGER,
+    source   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_visit_place ON visit(place_id);
+CREATE TABLE IF NOT EXISTS survey (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT,
+    place_id INTEGER,
+    results  TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_survey_place ON survey(place_id);
+"""
+
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance in metres. Good enough at 1.2 km; the earth is not a sphere."""
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def places_con(path=None):
+    con = sqlite3.connect(path or PLACES_DB, timeout=10)
+    con.executescript(PLACES_SCHEMA)
+    return con
+
+
+def latest_fix(db=None):
+    """The newest GPS sample, or None.
+
+    Read-only on purpose: van.db is the poller's file. A missing table (before the first drain) is
+    "no fix", not an error - the page has to be able to say "no fix yet" without a 500.
+    """
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % (db or DB), uri=True, timeout=5)
+        try:
+            row = con.execute(
+                "SELECT ts, lat, lon, alt, sats, fix FROM gps ORDER BY ts DESC LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row or row[1] is None or row[2] is None:
+        return None
+    return {"ts": row[0], "lat": row[1], "lon": row[2], "alt": row[3], "sats": row[4], "fix": row[5]}
+
+
+def place_mark(name, now=None, db=None, places_db=None):
+    """(http status, body) for POST /place/mark.
+
+    The rules, all of them Matt's (06-Nov-2026):
+      * no fix, no mark - a null position is worse than a gap;
+      * an existing name within 3/4 mile of any of its visits is the same place, and this is a visit;
+      * an existing name further away is an ERROR, and the error says how far and when;
+      * a new name that lands within 3/4 mile of a different place is created, but with a warning,
+        because that is how near-duplicates get made.
+    """
+    name = (name or "").strip()
+    if not name:
+        return 400, {"error": "name required"}
+    if len(name) > 64:
+        return 400, {"error": "name too long (64 characters max)"}
+
+    fix = latest_fix(db)
+    if not fix:
+        return 409, {"error": "no fix",
+                     "detail": "Delilah has no GPS fix right now, so there is no position to mark. "
+                               "A cold start takes a few minutes; indoors it may never fix."}
+
+    con = places_con(places_db)
+    try:
+        row = con.execute("SELECT id, name FROM place WHERE name = ? COLLATE NOCASE",
+                          (name,)).fetchone()
+        if row:
+            place_id, stored = row
+            visits = con.execute(
+                "SELECT ts, lat, lon FROM visit WHERE place_id = ?", (place_id,)).fetchall()
+            nearest = None
+            for ts, lat, lon in visits:
+                if lat is None or lon is None:
+                    continue
+                d = haversine_m(fix["lat"], fix["lon"], lat, lon)
+                if nearest is None or d < nearest[0]:
+                    nearest = (d, ts, lat, lon)
+            if nearest and nearest[0] > PLACE_RADIUS_M:
+                return 409, {
+                    "error": "too far",
+                    "name": stored,
+                    "distance_m": round(nearest[0]),
+                    "radius_m": PLACE_RADIUS_M,
+                    "nearest_ts": nearest[1],
+                    "nearest_lat": nearest[2],
+                    "nearest_lon": nearest[3],
+                    "detail": "\"%s\" is already a place %.1f mi from here. Use a different name, "
+                              "or mark it where it was." % (stored, nearest[0] / 1609.344),
+                }
+            con.execute(
+                "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"],
+                 fix["fix"], "mark"))
+            con.execute("UPDATE place SET last_ts = ? WHERE id = ?", (fix["ts"], place_id))
+            con.commit()
+            return 200, {"ok": True, "place": {"id": place_id, "name": stored},
+                         "visit_ts": fix["ts"], "distance_m": round(nearest[0]) if nearest else None,
+                         "new_place": False}
+
+        # A new name. Warn if it is standing on top of an existing place.
+        warning = None
+        for pid, pname, ts, lat, lon in con.execute(
+                "SELECT p.id, p.name, v.ts, v.lat, v.lon FROM place p"
+                " JOIN visit v ON v.place_id = p.id"):
+            if lat is None or lon is None:
+                continue
+            d = haversine_m(fix["lat"], fix["lon"], lat, lon)
+            if d <= PLACE_RADIUS_M:
+                warning = ("\"%s\" is already a place %.1f mi from here - did you mean that one?"
+                           % (pname, d / 1609.344))
+                break
+        cur = con.execute("INSERT INTO place (name, first_ts, last_ts) VALUES (?,?,?)",
+                          (name, fix["ts"], fix["ts"]))
+        place_id = cur.lastrowid
+        con.execute(
+            "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"], fix["fix"], "mark"))
+        con.commit()
+        body = {"ok": True, "place": {"id": place_id, "name": name},
+                "visit_ts": fix["ts"], "new_place": True}
+        if warning:
+            body["warning"] = warning
+        return 201, body
+    finally:
+        con.close()
+
+
+def read_places(places_db=None, db=None):
+    """Every place with its visit and survey counts, newest visit first."""
+    try:
+        con = places_con(places_db)
+    except sqlite3.Error as e:
+        return {"error": "cannot open places: %s" % e}
+    try:
+        rows = con.execute(
+            "SELECT p.id, p.name, p.first_ts, p.last_ts,"
+            " (SELECT COUNT(*) FROM visit v WHERE v.place_id = p.id),"
+            " (SELECT COUNT(*) FROM survey s WHERE s.place_id = p.id),"
+            " (SELECT v.lat FROM visit v WHERE v.place_id = p.id ORDER BY v.ts DESC LIMIT 1),"
+            " (SELECT v.lon FROM visit v WHERE v.place_id = p.id ORDER BY v.ts DESC LIMIT 1)"
+            " FROM place p ORDER BY p.last_ts DESC").fetchall()
+    finally:
+        con.close()
+    return {
+        "radius_m": PLACE_RADIUS_M,
+        "latest_fix": latest_fix(db),
+        "places": [{"id": r[0], "name": r[1], "first_ts": r[2], "last_ts": r[3],
+                    "visits": r[4], "surveys": r[5], "lat": r[6], "lon": r[7]} for r in rows],
+    }
+
 
 
 def read_dismissed(path=None):
@@ -678,6 +869,30 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                           json.dumps(body).encode("utf-8"))
             return
 
+        # Ada 06-Nov-2026 Mark Location (plan §15l). The name is the join key between a placemark
+        # and a survey, so this is the cheap half of the pair: no disruption, no data, and it works
+        # whether or not the dish is up.
+        if path == "/place/mark":
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "bad json"}).encode("utf-8"))
+                return
+            try:
+                status, body = place_mark(payload.get("name"))
+            except sqlite3.Error as e:
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write places: %s" % e}).encode("utf-8"))
+                return
+            self.no_store = True
+            self._respond(status, "application/json; charset=utf-8",
+                          json.dumps(body).encode("utf-8"))
+            return
+
         if path == "/history":
             self._respond(405, "application/json; charset=utf-8",
                           json.dumps({"error": "method not allowed"}).encode("utf-8"))
@@ -724,6 +939,14 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/places", "/places.json"):
+            # Ada 06-Nov-2026 the place registry, plus the fix a mark would use right now, so the
+            # page can say "no fix" before the button is pressed rather than after (plan §15l).
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_places()).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/version", "/version.json"):
