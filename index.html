@@ -453,6 +453,8 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
   font:inherit;font-size:0.85rem;padding:.3rem .45rem;min-width:0}
 #place-tile input::placeholder{color:var(--faint)}
 #place-tile input:focus{outline:none;border-color:var(--ok)}
+#place-tile .placebtns{display:flex;gap:.35rem}
+#place-tile .placebtns button{flex:1 1 0;min-width:0}
 #place-tile button{width:100%;background:rgba(255,255,255,.10);border:1px solid rgba(148,163,184,.28);
   border-radius:4px;color:var(--title);font:inherit;font-size:0.8rem;letter-spacing:.06em;
   text-transform:uppercase;padding:.32rem .45rem;cursor:pointer}
@@ -1418,9 +1420,13 @@ function routerSection(r) {
       <input id="place-name" list="place-names" placeholder="Location Name"
              autocomplete="off" spellcheck="false" maxlength="64">
       <datalist id="place-names"></datalist>
-      <button id="place-mark" type="button">Mark Location</button>
+      <div class="placebtns">
+        <button id="place-mark" type="button">Mark Location</button>
+        <button id="survey-run" type="button">Survey</button>
+      </div>
     </div>
     <div class="r"><span class="v small" id="place-msg"></span></div>
+    <div class="r"><span class="v small" id="survey-state">&mdash;</span></div>
   </div>
     <!-- Ada 06-Nov-2026 first tile in the router section, and renamed "WAN Connection"
          (Matt): it answers "what is carrying the traffic", which is the first question
@@ -2555,10 +2561,80 @@ async function markLocation() {
   }
 }
 
+
+// Ada 06-Nov-2026 the survey half of the pair (plan §15j). Manual only: the button is the only
+// thing that starts a run. The engine lives on Delilah and runs detached, so this polls for its
+// state rather than waiting on a request that the switch could cut.
+const SURVEY_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/survey";
+const SURVEY_RUN_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/survey/run";
+let surveyFast = null;
+
+function surveyText(s) {
+  if (!s || !s.state) return "\u2014";
+  if (s.state === "unknown") return "no survey yet";
+  if (s.state === "measuring") return "measuring\u2026";
+  if (s.state === "switching") return "switching to " + (s.winner_label || "?") + "\u2026";
+  if (s.state === "done") {
+    const r = (s.results || []).find(function (x) { return x.id === s.winner; });
+    const sp = r && r.speed_bps ? " \u00b7 " + (r.speed_bps / 1e6).toFixed(2) + " MB/s" : "";
+    const sw = s.switch && s.switch.switched ? " (switched)" : "";
+    return "won: " + (s.winner_label || "nothing usable") + sp + sw;
+  }
+  return s.state;
+}
+
+async function loadSurvey() {
+  const el = $("#survey-state");
+  try {
+    const r = await fetch(SURVEY_URL + "?t=" + Date.now(), { cache: "no-store" });
+    const s = await r.json();
+    if (el) el.textContent = surveyText(s) + (s.stale ? " (router unreachable)" : "");
+    // While a run is in flight, look again every 3s: a survey is over in about 15.
+    const running = s.state === "measuring" || s.state === "switching";
+    if (running && !surveyFast) surveyFast = setInterval(loadSurvey, 3000);
+    if (!running && surveyFast) { clearInterval(surveyFast); surveyFast = null; }
+  } catch (e) {
+    if (el) el.textContent = "survey: unreachable";
+  }
+}
+
+async function runSurvey() {
+  const input = $("#place-name");
+  const btn = $("#survey-run");
+  const name = input ? input.value.trim() : "";
+  if (!name) {
+    placeMsg("Type a name first.", "bad");
+    if (input) input.focus();
+    return;
+  }
+  if (btn) btn.disabled = true;
+  placeMsg("Starting survey\u2026", "");
+  try {
+    const r = await fetch(SURVEY_RUN_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name }),
+    });
+    const b = await r.json();
+    if (!r.ok) {
+      placeMsg(b.detail || b.error || ("HTTP " + r.status), "bad");
+    } else {
+      placeMsg("Survey started at " + b.name + ".", "ok");
+      loadSurvey();
+      loadPlaces();  // the survey files the place, so the registry changed too
+    }
+  } catch (e) {
+    placeMsg("Cannot reach the data server: " + e.message, "bad");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
 // Delegated, because the router section is re-rendered every 15s and a listener bound to the
 // button itself would be thrown away with it.
 document.addEventListener("click", function (e) {
   if (e.target && e.target.id === "place-mark") markLocation();
+  if (e.target && e.target.id === "survey-run") runSurvey();
 });
 document.addEventListener("keydown", function (e) {
   if (e.target && e.target.id === "place-name" && e.key === "Enter") {
@@ -2590,10 +2666,11 @@ document.addEventListener("keydown", (e) => {
   info.classList.toggle("open");
 });
 
-load();
+// Ada 06-Nov-2026 the location tile is rendered by load(), so the two loaders that fill it wait for
+// that render: called alongside it they raced it and found no elements to write into.
+load().then(function () { loadPlaces(); loadSurvey(); }).catch(function () {});
 renderSky();
 loadUsage();
-loadPlaces();
 loadHistory();
 // Ada 06-Nov-2026 the footer div sits after this script, so wait for the DOM before filling it
 if (document.readyState === "loading") {
@@ -2604,6 +2681,7 @@ if (document.readyState === "loading") {
 setInterval(load, 15000);
 setInterval(loadUsage, 60000);
 setInterval(loadPlaces, 60000);
+setInterval(loadSurvey, 60000);
 setInterval(loadHistory, 60000);
 setInterval(updateMap, 60000);
 
