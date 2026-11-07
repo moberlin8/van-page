@@ -444,6 +444,24 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage .r .v.big{font-size:1.05rem;margin-right:0}
 .csquare.usage .r{gap:.25rem}
 .csquare.usage{grid-template-rows:auto repeat(9,auto);gap:.18rem}
+/* Ada 06-Nov-2026 the location tile: one name field and one button, stacked because the panel is
+   300px wide and a side-by-side pair would squeeze the name to nothing. */
+#place-tile{grid-template-rows:auto auto auto auto auto}
+#place-tile .placeform{display:flex;flex-direction:column;gap:.35rem;padding:.15rem .5rem .1rem}
+#place-tile input{width:100%;box-sizing:border-box;background:rgba(255,255,255,.06);
+  border:1px solid rgba(148,163,184,.28);border-radius:4px;color:var(--title);
+  font:inherit;font-size:0.85rem;padding:.3rem .45rem;min-width:0}
+#place-tile input::placeholder{color:var(--faint)}
+#place-tile input:focus{outline:none;border-color:var(--ok)}
+#place-tile button{width:100%;background:rgba(255,255,255,.10);border:1px solid rgba(148,163,184,.28);
+  border-radius:4px;color:var(--title);font:inherit;font-size:0.8rem;letter-spacing:.06em;
+  text-transform:uppercase;padding:.32rem .45rem;cursor:pointer}
+#place-tile button:hover{background:rgba(255,255,255,.16)}
+#place-tile button:active{transform:translateY(1px)}
+#place-tile button:disabled{opacity:.45;cursor:default}
+#place-tile #place-msg{color:var(--faint);line-height:1.25;display:block;text-align:left}
+#place-tile #place-msg.ok{color:var(--ok)}
+#place-tile #place-msg.bad{color:var(--bad)}
 .csquare .r{display:flex;align-items:baseline;justify-content:space-between;
   gap:.6rem;min-width:0;padding:.06rem .5rem}
 /* Ada 23-Oct-2026 the LABEL can shrink and wrap. A long label
@@ -1377,6 +1395,33 @@ function routerSection(r) {
     <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text. -->
     <div class="r" style="justify-content:center"><span class="v" id="usg-status">&mdash;</span></div>
   </div>
+  <!-- Ada 06-Nov-2026 location: one name field, and the cheap half of the pair (plan §15l).
+       Mark Location records the current fix under that name; the survey will use the same field,
+       so a place accumulates visits and - once surveyed - which WAN won there. -->
+  <div class="csquare list" id="place-tile">
+    <div class="btitle">location</div>
+    <span class="info" tabindex="0" role="button" aria-label="About location"><span class="tip" role="tooltip">
+      <p><b>One name, two actions.</b> Type a name and press <b>Mark Location</b> to record
+        where you are. The same name will start a WAN survey when that lands, so a place
+        collects visits and, in time, which connection won there.</p>
+      <p><b>Re-using a name means the same place.</b> Within &frac34; mile of an earlier visit
+        it is a new visit to that place; further away it is refused, because that is a
+        different place wearing the same name. A new name that lands on top of an existing
+        place is accepted with a warning.</p>
+      <p><b>No fix, no mark.</b> The position comes from Delilah&rsquo;s GNSS, which needs a
+        few minutes from cold and may never fix indoors. A dash in <b>Fix</b> means there is
+        nothing to record yet.</p>
+    </span></span>
+    <div class="r"><span class="k">Fix</span><span class="v small" id="place-fix">&mdash;</span></div>
+    <div class="r"><span class="k">Place</span><span class="v small" id="place-last">&mdash;</span></div>
+    <div class="placeform">
+      <input id="place-name" list="place-names" placeholder="Location Name"
+             autocomplete="off" spellcheck="false" maxlength="64">
+      <datalist id="place-names"></datalist>
+      <button id="place-mark" type="button">Mark Location</button>
+    </div>
+    <div class="r"><span class="v small" id="place-msg"></span></div>
+  </div>
     <!-- Ada 06-Nov-2026 first tile in the router section, and renamed "WAN Connection"
          (Matt): it answers "what is carrying the traffic", which is the first question
          about the router. It was "failover" and sat after resources. -->
@@ -1805,9 +1850,12 @@ async function load() {
   const keep = {};
   for (const el of [$("#tput"), $("#usg-dish-level"), $("#usg-dish-used"), $("#usg-dish-cycle"),
                    $("#usg-sim-level"), $("#usg-sim-used"), $("#usg-sim-cycle"),
-                   $("#usg-cost"), $("#usg-risk"), $("#usg-status")]) {
+                   $("#usg-cost"), $("#usg-risk"), $("#usg-status"), $("#place-tile")]) {
     if (el) keep[el.id] = el.innerHTML;
   }
+  // Ada 06-Nov-2026 the location tile holds an input, and innerHTML does not carry a value: a
+  // half-typed place name would be wiped by the 15s re-render. Keep it beside the markup.
+  const keepPlaceName = $("#place-name") ? $("#place-name").value : "";
   var dsh = $("#dish");
   if (dsh) {
     dsh.innerHTML = snap.dish
@@ -1827,6 +1875,10 @@ async function load() {
   for (const id in keep) {
     const el = $(id);
     if (el) el.innerHTML = keep[id];
+  }
+  if (keepPlaceName) {
+    const pn = $("#place-name");
+    if (pn) pn.value = keepPlaceName;
   }
 
   // Ada 23-Oct-2026 the sky-view facts come from the snapshot, not the history:
@@ -2406,6 +2458,115 @@ async function loadUsage() {
   }
 }
 
+// Ada 06-Nov-2026 location: the name field and Mark Location (plan §15l). The name is the join key
+// between a placemark and a survey, so this is the cheap half of the pair - no disruption, no data,
+// and it works whether or not the dish is up. The survey will use the same field.
+const PLACES_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/places";
+const MARK_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/place/mark";
+
+function placeMsg(text, cls) {
+  const el = $("#place-msg");
+  if (!el) return;
+  el.textContent = text || "";
+  el.className = cls || "";
+}
+
+function fixAge(ts) {
+  if (!ts) return "no fix";
+  const t = Date.parse(ts);
+  if (isNaN(t)) return "no fix";
+  const s = Math.max(0, Math.round((Date.now() - t) / 1000));
+  if (s < 90) return s + "s ago";
+  if (s < 5400) return Math.round(s / 60) + "m ago";
+  return Math.round(s / 3600) + "h ago";
+}
+
+function renderPlaces(p) {
+  const fix = p.latest_fix;
+  const f = $("#place-fix");
+  if (f) {
+    f.textContent = fix
+      ? fixAge(fix.ts) + " \u00b7 " + (fix.sats == null ? "?" : fix.sats) + " sats"
+      : "no fix";
+  }
+  const dl = $("#place-names");
+  if (dl) {
+    dl.innerHTML = (p.places || []).map(function (x) {
+      return '<option value="' + esc(x.name) + '">';
+    }).join("");
+  }
+  const last = (p.places || [])[0];
+  const l = $("#place-last");
+  if (l) {
+    l.textContent = last
+      ? last.name + " \u00b7 " + last.visits + (last.visits === 1 ? " visit" : " visits")
+      : "\u2014";
+  }
+  // No fix, no mark: the button says so before it is pressed rather than after.
+  const btn = $("#place-mark");
+  if (btn) btn.disabled = !fix;
+}
+
+async function loadPlaces() {
+  try {
+    const r = await fetch(PLACES_URL + "?t=" + Date.now(), { cache: "no-store" });
+    const p = await r.json();
+    if (!r.ok) throw new Error(p.error || ("HTTP " + r.status));
+    renderPlaces(p);
+  } catch (e) {
+    const f = $("#place-fix");
+    if (f) f.textContent = "\u2014";
+  }
+}
+
+async function markLocation() {
+  const input = $("#place-name");
+  const btn = $("#place-mark");
+  const name = input ? input.value.trim() : "";
+  if (!name) {
+    placeMsg("Type a name first.", "bad");
+    if (input) input.focus();
+    return;
+  }
+  if (btn) btn.disabled = true;
+  placeMsg("Marking\u2026", "");
+  try {
+    const r = await fetch(MARK_URL, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: name }),
+    });
+    const b = await r.json();
+    if (!r.ok) {
+      placeMsg(b.detail || b.error || ("HTTP " + r.status), "bad");
+    } else {
+      const mi = b.distance_m == null ? ""
+        : " (" + (b.distance_m / 1609.344).toFixed(2) + " mi from the last visit)";
+      let msg = (b.new_place ? "New place: " : "Visit recorded: ") + b.place.name + mi;
+      if (b.warning) msg += " \u2014 " + b.warning;
+      placeMsg(msg, b.warning ? "bad" : "ok");
+      if (input) input.value = "";
+      loadPlaces();
+    }
+  } catch (e) {
+    placeMsg("Cannot reach the data server: " + e.message, "bad");
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+// Delegated, because the router section is re-rendered every 15s and a listener bound to the
+// button itself would be thrown away with it.
+document.addEventListener("click", function (e) {
+  if (e.target && e.target.id === "place-mark") markLocation();
+});
+document.addEventListener("keydown", function (e) {
+  if (e.target && e.target.id === "place-name" && e.key === "Enter") {
+    e.preventDefault();
+    markLocation();
+  }
+});
+
 // Ada 24-Oct-2026 the info tips are a TOGGLE (Matt): on an iPhone a tap focuses
 // the (i) and nothing ever blurs it, so the tip would not go away. Tap the (i)
 // to open it, tap it again -- or anywhere else -- to close it. A tap on the
@@ -2432,6 +2593,7 @@ document.addEventListener("keydown", (e) => {
 load();
 renderSky();
 loadUsage();
+loadPlaces();
 loadHistory();
 // Ada 06-Nov-2026 the footer div sits after this script, so wait for the DOM before filling it
 if (document.readyState === "loading") {
@@ -2441,6 +2603,7 @@ if (document.readyState === "loading") {
 }
 setInterval(load, 15000);
 setInterval(loadUsage, 60000);
+setInterval(loadPlaces, 60000);
 setInterval(loadHistory, 60000);
 setInterval(updateMap, 60000);
 
