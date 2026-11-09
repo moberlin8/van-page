@@ -390,13 +390,36 @@ def poll_dish():
     """Return a dict of dish readings, or raise."""
     import sqlite3  # noqa: F401  (kept local so a missing stdlib fails loudly)
 
+    # Ada 09-Nov-2026 the schema is primed from a disk cache before the call (dish_schema), so the
+    # tick's only network step is get_status. On a cache miss this reflects once, with a budget that
+    # survives this link's bad windows, and writes the cache for every tick after it.
     code = r'''
 import sys, json
 sys.path.insert(0, %r)
+sys.path.insert(0, %r)
+import dish_schema
 import starlink_grpc as s
+
 ctx = s.ChannelContext(%r)
-status = s.status_data(context=ctx)
-g, pdrop, pdrl, plat, llat, usage, power = s.history_stats(-1, context=ctx)
+_schema_path = dish_schema.cache_path(%r)
+_mode, _cached_sw = dish_schema.prime(s, _schema_path, ctx.get_channel()[0])
+try:
+    status = s.status_data(context=ctx)
+    g, pdrop, pdrl, plat, llat, usage, power = s.history_stats(-1, context=ctx)
+except Exception:
+    # A cached schema the firmware has outgrown fails as a parse/attribute error: drop it so the
+    # next tick reflects. A network failure keeps it -- the schema is still good, and throwing it
+    # away would put the expensive step back on the hot path for no reason.
+    if _mode == "cache" and "protocol" in str(sys.exc_info()[1]).lower():
+        dish_schema.forget(_schema_path)
+    raise
+
+_seen_sw = status[0].get("software_version")
+if _mode == "cache":
+    if dish_schema.stale_for(_cached_sw, _seen_sw):
+        dish_schema.forget(_schema_path)
+elif _mode == "fresh":
+    dish_schema.record_version(_schema_path, _seen_sw)
 
 out = {
     "status": dict(status[0]),
@@ -407,9 +430,10 @@ out = {
     "ping_drop": pdrop,
     "ping_latency": plat,
     "usage": usage,
-    "power": power}
+    "power": power,
+    "_schema": _mode}
 print(json.dumps(out))
-''' % (GRPC_TOOLS, DISH_TARGET)
+''' % (GRPC_TOOLS, HERE, DISH_TARGET, VAR)
 
     r = subprocess.run([VENV, "-c", code], capture_output=True, text=True, timeout=120)
     if r.returncode != 0:
@@ -693,8 +717,9 @@ def main():
         snap["dish_ts"] = now
         snap["dish_stale"] = False
         snap.pop("dish_error", None)
-        log("dish ok  state=%s lat=%s drop=%s" % (
-            snap["dish"]["state"], snap["dish"]["ping_latency"], snap["dish"]["ping_drop"]))
+        log("dish ok  state=%s lat=%s drop=%s schema=%s" % (
+            snap["dish"]["state"], snap["dish"]["ping_latency"], snap["dish"]["ping_drop"],
+            d.get("_schema")))
     except Exception as e:
         snap["dish_stale"] = True
         snap["dish_error"] = str(e)[:300]
