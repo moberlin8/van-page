@@ -534,6 +534,12 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 /* NOTE the descendant selectors, not `>`: display:contents changes LAYOUT, not
    the DOM, so the h2's parent is still #dish and #obmap-note's is #skyboxes. */
 .csquares.dishgrid h2{grid-column:1/-1;margin-bottom:0}
+/* Ada 09-Nov-2026 the dish panel's unavailable line (Matt): one short centred sentence, at half
+   the body size, in the page's warning amber. The reason itself stays in the tooltip, so the
+   panel states the condition and nothing more. It spans the grid because #dish is
+   display:contents, which makes this <p> a grid item of .dishgrid like the <h2>. */
+.csquares.dishgrid .dishnote{grid-column:1/-1;text-align:center;
+  font-size:.5em;line-height:1.4;color:var(--warn);margin:1rem 0 1.4rem}
 .csquares.dishgrid #obmap-note{grid-column:1/-1}
 .csquare.gbox{grid-template-columns:1fr;
   grid-template-rows:auto minmax(0,1fr) auto;align-content:stretch}
@@ -1119,10 +1125,11 @@ function dial(label, value, zones, note) {
 function dishSection(d) {
   const refusal = dishRefusal(d);
   if (refusal) {
+    // Ada 09-Nov-2026 one short line (Matt): the panel says what state it is in and nothing
+    // more. The reason dishRefusal() returned rides in the tooltip, so the evidence is still
+    // one hover away without putting a paragraph on the page.
     return `<h2>Starlink EvilDish</h2>
-      <p class="muted">no reading &mdash; ${esc(refusal)}. /van shows the van&rsquo;s own dish or
-        nothing, so this panel stays empty rather than borrowing another terminal&rsquo;s
-        numbers.</p>`;
+      <p class="dishnote" title="${esc(refusal)}">Dish data currently unavailable</p>`;
   }
   const h = d.history_15m || {}, u = d.usage_15m || {};
   const ok = d.is_snr_above_noise_floor;
