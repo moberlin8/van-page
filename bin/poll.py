@@ -234,6 +234,41 @@ def dish_terminal(status):
     return (status.get("id"), status.get("hardware_version"))
 
 
+# Ada 09-Nov-2026 which terminal the /van dish panel may show. Matt: "gate the dish panel on
+# EvilDish's identity so the home dish can't appear there", and "ut01188c8b- is the big boy
+# dish". Two Starlink kits answer 192.168.100.1, so the panel follows whichever wins the route,
+# and that has been the home kit since 05-Nov, when the van's WAN jack went dark. Their counters
+# have unrelated baselines, so a panel fed by both is mostly someone else's dish.
+#   VAN_DISH_IDS   -- the terminals /van MAY show. Empty until EvilDish's own device_info id is
+#                     captured: the poller only started storing ids on 06-Nov, by which time
+#                     the jack was already down, so nothing is attributable yet. Empty is the
+#                     honest state, not a bug.
+#   OTHER_DISH_IDS -- terminals identified as NOT the van's. BigBoyDish, the home kit.
+# The gate is closed by default: a terminal nobody has confirmed as the van's is refused too,
+# and naming a kit in OTHER_DISH_IDS outranks any allowlist entry, so a mis-pasted id cannot
+# put the home dish back on the page.
+VAN_DISH_IDS = ()
+OTHER_DISH_IDS = ("ut01188c8b-8281880f-1ac2a7ee",)
+
+
+def dish_terminal_is_van(dish_id, van_ids=None, other_ids=None):
+    """Is this sample positively the van's own terminal?
+
+    True when the id is allowlisted; False when it is a known other kit or an unlisted one;
+    None when the dish reported no identity at all -- which is not the same as "the same dish
+    as last time", and is refused as well.
+    """
+    if van_ids is None:
+        van_ids = VAN_DISH_IDS
+    if other_ids is None:
+        other_ids = OTHER_DISH_IDS
+    if not dish_id:
+        return None
+    if dish_id in other_ids:
+        return False
+    return dish_id in van_ids
+
+
 # Ada 06-Nov-2026 workstream D. The probe hands back strings and several are not a single number:
 # csq is "rssi,ber", load is a three-value average, link_quality is "70/70". Keep the first number
 # in each case and null the rest - a chart wants one value, and the second one is not a measurement.
@@ -590,6 +625,9 @@ def main():
             # Ada 06-Nov-2026 so the page can name the terminal it is reading
             "id": _dish_id,
             "hardware_version": _dish_hw,
+            # Ada 09-Nov-2026 the panel gate's own verdict, computed here and never in the page:
+            # /van renders the dish only when this is exactly True (see dish_terminal_is_van).
+            "van_terminal": dish_terminal_is_van(_dish_id),
             "uptime_s": num(st.get("uptime")),
             "ping_drop": num(st.get("pop_ping_drop_rate")),
             "ping_latency": num(st.get("pop_ping_latency_ms")),
