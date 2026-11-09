@@ -130,6 +130,10 @@ a:hover{text-decoration:underline}
    separate line. The meta line that used to carry it is gone. */
 .masthead .ago{font-family:var(--font);font-size:.6em;
   color:var(--faint);letter-spacing:.04em;white-space:nowrap}
+/* Ada 09-Nov-2026 the masthead's own warning (Matt): when the dish reading is refused, that
+   device's age slot says so in warning yellow. A live age stays grey -- yellow means look here.
+   The selector needs .masthead .ago's own specificity plus the class to win over color:faint. */
+.masthead .ago.warn{color:var(--warn)}
 .masthead .meta{
   font-family:var(--font);font-size:1.3125rem;color:var(--faint);
   letter-spacing:.04em}
@@ -534,12 +538,12 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 /* NOTE the descendant selectors, not `>`: display:contents changes LAYOUT, not
    the DOM, so the h2's parent is still #dish and #obmap-note's is #skyboxes. */
 .csquares.dishgrid h2{grid-column:1/-1;margin-bottom:0}
-/* Ada 09-Nov-2026 the dish panel's unavailable line (Matt): one short centred sentence, at half
-   the body size, in the page's warning amber. The reason itself stays in the tooltip, so the
+/* Ada 09-Nov-2026 the dish panel's unavailable line (Matt): one short centred sentence in the
+   page's warning amber, at the body size. The reason itself stays in the tooltip, so the
    panel states the condition and nothing more. It spans the grid because #dish is
    display:contents, which makes this <p> a grid item of .dishgrid like the <h2>. */
 .csquares.dishgrid .dishnote{grid-column:1/-1;text-align:center;
-  font-size:.5em;line-height:1.4;color:var(--warn);margin:1rem 0 1.4rem}
+  font-size:1em;line-height:1.4;color:var(--warn);margin:1rem 0 1.4rem}
 .csquares.dishgrid #obmap-note{grid-column:1/-1}
 .csquare.gbox{grid-template-columns:1fr;
   grid-template-rows:auto minmax(0,1fr) auto;align-content:stretch}
@@ -1129,7 +1133,7 @@ function dishSection(d) {
     // more. The reason dishRefusal() returned rides in the tooltip, so the evidence is still
     // one hover away without putting a paragraph on the page.
     return `<h2>Starlink EvilDish</h2>
-      <p class="dishnote" title="${esc(refusal)}">Dish data currently unavailable</p>`;
+      <p class="dishnote" title="${esc(refusal)}">Dish Data Currently Unavailable</p>`;
   }
   const h = d.history_15m || {}, u = d.usage_15m || {};
   const ok = d.is_snr_above_noise_floor;
@@ -1869,9 +1873,14 @@ async function load() {
   // this tick. The 200-second switch between "N seconds" and "N minutes N
   // seconds" is unchanged.
   const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
-  // Ada 09-Nov-2026 the masthead follows the same gate as the panel: "no reading" rather than an
-  // age, because the age belongs to a reading the page is refusing to show.
-  if (agoDish) agoDish.textContent = dishRefusal(snap.dish) ? "no reading" : age(snap.dish_ts, now);
+  // Ada 09-Nov-2026 the masthead follows the same gate as the panel (Matt): the refused state
+  // reads "No Reading" in warning yellow, because the age belongs to a reading the page is
+  // refusing to show. A live age keeps its usual grey -- the colour is the warning.
+  if (agoDish) {
+    const refused = !!dishRefusal(snap.dish);
+    agoDish.textContent = refused ? "No Reading" : age(snap.dish_ts, now);
+    agoDish.className = refused ? "ago warn" : "ago";
+  }
   if (agoRouter) agoRouter.textContent = age(snap.delilah_ts, now);
 
   const stale = [];
