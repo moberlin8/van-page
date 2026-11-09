@@ -88,8 +88,16 @@ class TestVanDishGate(unittest.TestCase):
     def test_an_allowlisted_terminal_is_the_vans(self):
         self.assertIs(True, poll.dish_terminal_is_van("ut-van-0001", van_ids=("ut-van-0001",)))
 
-    def test_an_unlisted_terminal_is_refused_not_guessed(self):
-        self.assertIs(False, poll.dish_terminal_is_van("ut-someone-else"))
+    def test_an_unlisted_terminal_is_undecided_while_no_allowlist_is_set(self):
+        # with VAN_DISH_IDS empty, the denylist is the only rule: anything that is not a
+        # known other kit passes, which is what lets the panel come back the moment EvilDish
+        # answers (its id cannot be known before it does).
+        self.assertIs(True, poll.dish_terminal_is_van("ut-someone-else"))
+
+    def test_an_unlisted_terminal_is_refused_once_an_allowlist_exists(self):
+        # filling VAN_DISH_IDS switches the gate to strict mode: membership, not absence
+        self.assertIs(False, poll.dish_terminal_is_van(
+            "ut-someone-else", van_ids=("ut-van-0001",)))
 
     def test_a_missing_identity_is_unknown_and_refused(self):
         self.assertIs(None, poll.dish_terminal_is_van(None))
@@ -98,7 +106,10 @@ class TestVanDishGate(unittest.TestCase):
     def test_nothing_is_the_vans_until_its_id_is_captured(self):
         # EvilDish's own device_info id has never been recorded: the poller only started
         # storing ids on 06-Nov, by which time the WAN jack was already dark. Empty is the
-        # honest state, not a bug -- filling it from guesswork is how BigBoyDish got on /van.
+        # honest state -- the gate then runs on the denylist alone, which is what keeps the
+        # home kit off the page without needing an id we do not have.
+        # The serial on the account page (KFV4M02179606WB8) is NOT usable here: the gRPC
+        # deviceInfo exposes id/hardware_version/software_version and no serial at all.
         self.assertEqual((), poll.VAN_DISH_IDS)
         self.assertIn(BIGBOY, poll.OTHER_DISH_IDS)
 
@@ -165,6 +176,11 @@ class TestSnapshotVerdict(unittest.TestCase):
 
     def test_a_dish_with_no_identity_serialises_as_unknown(self):
         self.assertIsNone(self._tick(None)["van_terminal"])
+
+    def test_a_different_terminal_is_shown_while_no_allowlist_is_set(self):
+        # the case that matters when EvilDish is finally powered: nothing has to be edited
+        # for the panel to come back, because the home kit is the only id we refuse
+        self.assertIs(True, self._tick("ut-evil-dish-unknown-yet")["van_terminal"])
 
 
 if __name__ == "__main__":

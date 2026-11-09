@@ -239,24 +239,32 @@ def dish_terminal(status):
 # dish". Two Starlink kits answer 192.168.100.1, so the panel follows whichever wins the route,
 # and that has been the home kit since 05-Nov, when the van's WAN jack went dark. Their counters
 # have unrelated baselines, so a panel fed by both is mostly someone else's dish.
-#   VAN_DISH_IDS   -- the terminals /van MAY show. Empty until EvilDish's own device_info id is
-#                     captured: the poller only started storing ids on 06-Nov, by which time
-#                     the jack was already down, so nothing is attributable yet. Empty is the
-#                     honest state, not a bug.
-#   OTHER_DISH_IDS -- terminals identified as NOT the van's. BigBoyDish, the home kit.
-# The gate is closed by default: a terminal nobody has confirmed as the van's is refused too,
-# and naming a kit in OTHER_DISH_IDS outranks any allowlist entry, so a mis-pasted id cannot
-# put the home dish back on the page.
+#   OTHER_DISH_IDS -- terminals identified as NOT the van's, refused whatever else is configured.
+#                     BigBoyDish, the home kit. This list is what makes Matt's rule ("BigBoyDish
+#                     must never appear on /van") hold, and it is the half we can populate today.
+#   VAN_DISH_IDS   -- the van's own terminals (strict mode). Empty: EvilDish's device_info id has
+#                     never been read -- the poller only started storing ids on 06-Nov, by which
+#                     time the jack was dark -- so listing it would be a guess. While it is empty
+#                     the gate runs on the denylist alone (see dish_terminal_is_van).
+# The kit serial on the Starlink account page (KFV4M02179606WB8 for EvilDish, Matt 09-Nov-2026)
+# CANNOT be used here: the dish's gRPC deviceInfo carries id / hardware_version /
+# software_version and no serial at all. `id` is the only per-kit discriminator -- both kits
+# report hardware_version "rev4_pez_proto1" -- and firmware changes under a kit, so it is not
+# an identity either.
 VAN_DISH_IDS = ()
 OTHER_DISH_IDS = ("ut01188c8b-8281880f-1ac2a7ee",)
 
 
 def dish_terminal_is_van(dish_id, van_ids=None, other_ids=None):
-    """Is this sample positively the van's own terminal?
+    """May this sample be shown on /van as the van's own terminal?
 
-    True when the id is allowlisted; False when it is a known other kit or an unlisted one;
-    None when the dish reported no identity at all -- which is not the same as "the same dish
-    as last time", and is refused as well.
+    Refused (False) when the id is a known other kit -- an explicit denylist entry outranks the
+    allowlist, so a mis-pasted id cannot put the home dish back on the page. Refused again once
+    VAN_DISH_IDS is populated and the id is not in it (strict membership). While VAN_DISH_IDS is
+    empty -- EvilDish's id is not known yet -- anything that is not a known other kit passes, so
+    the panel comes back by itself the first time EvilDish answers instead of waiting for an
+    edit. None when the dish reported no identity at all, which is not the same as "the same
+    dish as last time" and is refused as well.
     """
     if van_ids is None:
         van_ids = VAN_DISH_IDS
@@ -266,7 +274,9 @@ def dish_terminal_is_van(dish_id, van_ids=None, other_ids=None):
         return None
     if dish_id in other_ids:
         return False
-    return dish_id in van_ids
+    if van_ids:
+        return dish_id in van_ids
+    return True
 
 
 # Ada 06-Nov-2026 workstream D. The probe hands back strings and several are not a single number:
