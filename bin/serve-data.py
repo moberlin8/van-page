@@ -398,26 +398,45 @@ def survey_state(max_age=5.0, places_db=None):
 # read_history() because the gps table's ts is the GPS's own ISO-8601 UTC string, not the epoch
 # float every other table uses - the whole point of it being the fix's clock rather than the
 # router's. Comparing it to a float would silently return nothing.
-def read_track(hours=24, db=None):
-    """Columnar track for the last `hours`, oldest first."""
+def read_track(hours=None, db=None):
+    """Columnar track, oldest first. `hours` falsy (None or 0) means everything we hold.
+
+    Ada 09-Nov-2026 Matt: "the whole trip's track rather than the last day". A track is a SHAPE --
+    "where have we been" is cumulative -- so the position panel asks for the whole record while the
+    charts beside it keep their own window. Two things follow from letting the query be unbounded:
+    the response must still be bounded (MAX_POINTS, the same cap the charts use), and the LAST fix
+    must survive the thinning, because the panel draws it as the amber "you are here" pin and a
+    strided last point would put that pin up to `stride` intervals in the past.
+    """
     db = DB if db is None else db
     if not os.path.exists(db):
         return {"error": "no history database yet"}
-    since = time.time() - hours * 3600
-    since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+    where, args = "", ()
+    if hours:
+        since = time.time() - hours * 3600
+        since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+        where, args = " WHERE ts >= ?", (since_iso,)
     try:
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
         try:
             rows = con.execute(
-                "SELECT ts, lat, lon, alt, speed, sats FROM gps WHERE ts >= ? ORDER BY ts ASC",
-                (since_iso,)).fetchall()
+                "SELECT ts, lat, lon, alt, speed, sats FROM gps" + where + " ORDER BY ts ASC",
+                args).fetchall()
         finally:
             con.close()
     except sqlite3.Error as e:
         return {"error": "cannot read the track: %s" % e}
 
-    out = {"hours": hours, "count": len(rows), "ts": [], "lat": [], "lon": [],
-           "alt": [], "speed": [], "sats": []}
+    total = len(rows)
+    stride = max(1, int(total / MAX_POINTS) + 1)
+    if stride > 1:
+        newest = rows[-1]
+        rows = rows[::stride]
+        if rows[-1] is not newest:
+            rows.append(newest)      # the pin marks the newest fix, not the nearest strided one
+
+    out = {"hours": hours, "count": 0, "total": total, "stride": stride,
+           "ts": [], "lat": [], "lon": [], "alt": [], "speed": [], "sats": []}
     for ts, lat, lon, alt, speed, sats in rows:
         try:
             epoch = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -1181,12 +1200,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if u.path.rstrip("/") in ("/track", "/track.json"):
             # Ada 06-Nov-2026 the GPS track for the history page (plan §15k).
+            # Ada 09-Nov-2026 `hours=0` means the whole record (Matt: "the whole trip's track
+            # rather than the last day"). The DEFAULT stays bounded on purpose: an endpoint that
+            # hands back everything when asked nothing is a trap on a record that only grows, so
+            # the page asks for the whole trip explicitly and a stray caller does not.
             q = urllib.parse.parse_qs(u.query)
             try:
                 hours = float(q.get("hours", ["24"])[0])
             except ValueError:
                 hours = 24.0
-            hours = max(0.25, min(24 * 90, hours))
+            hours = None if hours <= 0 else max(0.25, min(24 * 90, hours))
             self.no_store = True
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps(read_track(hours)).encode("utf-8"))
