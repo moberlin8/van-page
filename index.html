@@ -1409,10 +1409,12 @@ function routerSection(r) {
       <p><b>One name, two actions.</b> Type a name and press <b>Mark Location</b> to record
         where you are. The same name will start a WAN survey when that lands, so a place
         collects visits and, in time, which connection won there.</p>
-      <p><b>Re-using a name means the same place.</b> Within &frac34; mile of an earlier visit
-        it is a new visit to that place; further away it is refused, because that is a
-        different place wearing the same name. A new name that lands on top of an existing
-        place is accepted with a warning.</p>
+      <p><b>&frac34; mile is the line, and it cuts both ways.</b> Re-using a name within
+        &frac34; mile of an earlier visit is a new visit to that place; further away it is
+        refused, because that is a different place wearing the same name. A new name within
+        &frac34; mile of an existing place is refused too, because that is the same place wearing
+        a different name. Type the name you used last time, or mark the new one where it
+        belongs.</p>
       <p><b>No fix, no mark.</b> The position comes from Delilah&rsquo;s GNSS, which needs a
         few minutes from cold and may never fix indoors. A dash in <b>Fix</b> means there is
         nothing to record yet.</p>
@@ -2554,9 +2556,9 @@ async function markLocation() {
     } else {
       const mi = b.distance_m == null ? ""
         : " (" + (b.distance_m / 1609.344).toFixed(2) + " mi from the last visit)";
-      let msg = (b.new_place ? "New place: " : "Visit recorded: ") + b.place.name + mi;
-      if (b.warning) msg += " \u2014 " + b.warning;
-      placeMsg(msg, b.warning ? "bad" : "ok");
+      // Ada 09-Nov-2026 the warning branch went with the warning itself: a name that lands on top
+      // of an existing place is now a 409, shown above from b.detail like any other refusal.
+      placeMsg((b.new_place ? "New place: " : "Visit recorded: ") + b.place.name + mi, "ok");
       if (input) input.value = "";
       loadPlaces();
     }
