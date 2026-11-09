@@ -2585,8 +2585,12 @@ function renderPlaces(p) {
   const last = (p.places || [])[0];
   const l = $("#place-last");
   if (l) {
+    // Ada 09-Nov-2026 the count is SURVEYS, not visits (Matt). A visit is a placemark; a survey is
+    // the thing the tile's own button produces, and it is what the report page lists -- so the row
+    // now counts the same thing the button does.
+    const n = last ? (last.surveys || 0) : null;
     l.textContent = last
-      ? last.name + " \u00b7 " + last.visits + (last.visits === 1 ? " visit" : " visits")
+      ? last.name + " \u00b7 " + n + (n === 1 ? " survey" : " surveys")
       : "\u2014";
   }
   // No fix, no mark: the button says so before it is pressed rather than after.
