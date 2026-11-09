@@ -936,6 +936,31 @@ function decodeAlerts(mask){
 // ceiling); a megabit is a telecom unit. 1 MB/s = 8 Mb/s.
 const MBPS = {f:8e6, u:"MB/s"};
 
+// Ada 09-Nov-2026 the dish panel shows the van's own dish or nothing (Matt: "gate the dish panel
+// on EvilDish's identity so the home dish can't appear there"). Two Starlink kits answer
+// 192.168.100.1, so the panel follows whichever wins the route, and this box has been reading the
+// home kit since 05-Nov, when the van's WAN jack (eth0) went dark. `van_terminal` is the poller's
+// verdict (poll.py: dish_terminal_is_van) -- none of it is recomputed here, because a second
+// implementation of the same policy is how the two drift apart.
+//   true          -- the van's own kit answered; render it
+//   false         -- an identified other kit answered; refuse and name it
+//   null/absent   -- the dish reported no identity, which is NOT the same as "the same dish as
+//                    last time"; refuse. A snapshot written before the gate existed carries no
+//                    verdict, so it is refused too rather than trusted.
+// Returns the reason to show, or null when the reading may be rendered. Plain text, unescaped:
+// the masthead writes it with textContent.
+const dishRefusal = (d) => {
+  if (d && d.van_terminal === true) return null;
+  if (!d) return "no dish data yet";
+  const id = String(d.id == null ? "" : d.id).trim();
+  if (d.van_terminal === false) {
+    return "the terminal answering 192.168.100.1 is a different Starlink kit"
+         + (id ? " (" + id + ")" : "");
+  }
+  return "this reading is not identified as the van's dish"
+       + (id ? " (the dish reported " + id + ")" : " (the dish reported no identity)");
+};
+
 // ---- zones ------------------------------------------------------------------
 // zones = [{to: <axis value>, cls: "ok"|"warn"|"bad"}, ...] ascending from lo.
 // The value's own colour is the zone it lands in.
@@ -1089,7 +1114,16 @@ function dial(label, value, zones, note) {
 }
 
 // ---- dish -------------------------------------------------------------------
+// Ada 09-Nov-2026 the identity gate is the panel's first statement, so there is no way to paint
+// the metrics without passing it: dishRefusal() answers for the poller's verdict.
 function dishSection(d) {
+  const refusal = dishRefusal(d);
+  if (refusal) {
+    return `<h2>Starlink EvilDish</h2>
+      <p class="muted">no reading &mdash; ${esc(refusal)}. /van shows the van&rsquo;s own dish or
+        nothing, so this panel stays empty rather than borrowing another terminal&rsquo;s
+        numbers.</p>`;
+  }
   const h = d.history_15m || {}, u = d.usage_15m || {};
   const ok = d.is_snr_above_noise_floor;
 
@@ -1828,7 +1862,9 @@ async function load() {
   // this tick. The 200-second switch between "N seconds" and "N minutes N
   // seconds" is unchanged.
   const agoDish = $("#ago-dish"), agoRouter = $("#ago-router");
-  if (agoDish) agoDish.textContent = age(snap.dish_ts, now);
+  // Ada 09-Nov-2026 the masthead follows the same gate as the panel: "no reading" rather than an
+  // age, because the age belongs to a reading the page is refusing to show.
+  if (agoDish) agoDish.textContent = dishRefusal(snap.dish) ? "no reading" : age(snap.dish_ts, now);
   if (agoRouter) agoRouter.textContent = age(snap.delilah_ts, now);
 
   const stale = [];
@@ -1897,7 +1933,14 @@ async function load() {
 
   // Ada 23-Oct-2026 the sky-view facts come from the snapshot, not the history:
   // they are the dish's current obstruction averages, not a time series.
-  if (snap.dish) {
+  // Ada 09-Nov-2026 the sky map and the obstruction stats are the dish's own data, so the identity
+  // gate covers them too: another kit's obstruction map on the van page is the same mistake as
+  // another kit's throughput. #skyboxes is hidden rather than re-rendered, so the map <img> and its
+  // listeners survive (load() runs every 15s and must not reset the image).
+  const dishOk = !dishRefusal(snap.dish);
+  const skyboxes = $("skyboxes");
+  if (skyboxes) skyboxes.style.display = dishOk ? "" : "none";
+  if (snap.dish && dishOk) {
     const obf = $("#obfrac"), obd = $("#obdur"), obi = $("#obint");
     if (obf) obf.textContent = snap.dish.frac_obstruct == null ? "&mdash;"
       : (snap.dish.frac_obstruct * 100).toFixed(1) + " %";
