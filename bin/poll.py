@@ -499,12 +499,26 @@ def normalise_events(events):
     return out
 
 
-def record_events(events, prev_delilah, nd, prev_dish_stale, dish_stale, now):
+# Ada 09-Nov-2026 the two dish-feed events, named so the identity gate can both withhold new ones
+# and withdraw old ones. They assert something about the VAN's dish feed, and while another kit is
+# the one answering they are not about the van at all (see record_events).
+DISH_EVENT_MSGS = ("Dish data became stale", "Dish data recovered")
+
+
+def record_events(events, prev_delilah, nd, prev_dish_stale, dish_stale, now, dish_is_van):
     """Append state-change events, then age out and cap. Returns the new list.
 
     Normalises on the way in, so every event this returns carries an id --
     that invariant is the whole point (a dismissal is addressed by id), and
     enforcing it here means a caller cannot forget it.
+
+    Ada 09-Nov-2026 `dish_is_van` is this tick's verdict from dish_terminal_is_van(). Unless it is
+    exactly True the dish stale/recovered pair is withheld AND any already recorded are withdrawn:
+    /van shows the van's own dish or nothing, so an alert reading "Dish data became stale" above a
+    panel reading "Dish Data Currently Unavailable" is the page contradicting itself. The feed such
+    events describe belongs to a different kit -- on 09-Nov four of them tracked the home kit
+    flapping over the WiFi repeater while Delilah was up throughout -- and its flapping is not the
+    van's news. The panel's own line is the signal; it does not need an alert storm repeating it.
     """
     events = normalise_events(events)
     seq = [0]
@@ -533,11 +547,16 @@ def record_events(events, prev_delilah, nd, prev_dish_stale, dish_stale, now):
     _o, _n = prev_delilah.get("imsi"), nd.get("imsi")
     if _o and _n and _o != _n:
         _evt("SIM changed (IMSI %s -> %s)" % (_o, _n))
-    # dish stale / recovered
-    if not prev_dish_stale and dish_stale:
-        _evt("Dish data became stale")
-    elif prev_dish_stale and not dish_stale:
-        _evt("Dish data recovered")
+    # dish stale / recovered -- the van's own terminal only (see the docstring). Withheld when the
+    # reading is refused, and any already recorded are withdrawn so the page stops contradicting
+    # its own panel.
+    if dish_is_van is True:
+        if not prev_dish_stale and dish_stale:
+            _evt(DISH_EVENT_MSGS[0])
+        elif prev_dish_stale and not dish_stale:
+            _evt(DISH_EVENT_MSGS[1])
+    else:
+        events = [e for e in events if e.get("msg") not in DISH_EVENT_MSGS]
 
     events = [e for e in events if now - (e.get("ts") or 0) <= EVENT_WINDOW_S]
     return events[-EVENT_KEEP_MAX:]
@@ -791,9 +810,12 @@ def main():
     # ---- record state changes for the /van notifier (Matt, 27-Oct-2026) -----------
     # Ada 02-Nov-2026 the triggers moved into record_events() so the id assignment
     # and the retention window are unit-testable (tests/test_poll_events.py).
+    # Ada 09-Nov-2026 the dish pair also needs this tick's identity verdict: a reading /van is
+    # refusing must not raise dish alerts (see record_events).
     snap["events"] = record_events(snap.get("events", []),
                                    prev_delilah, snap.get("delilah") or {},
-                                   prev_dish_stale, snap.get("dish_stale"), now)
+                                   prev_dish_stale, snap.get("dish_stale"), now,
+                                   (snap.get("dish") or {}).get("van_terminal"))
     save_snapshot(snap)
     con.close()
 
