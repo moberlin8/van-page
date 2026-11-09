@@ -1883,13 +1883,23 @@ async function load() {
   }
   if (agoRouter) agoRouter.textContent = age(snap.delilah_ts, now);
 
+  // Ada 09-Nov-2026 one verdict, used twice: is this snapshot's dish reading the van's own?
+  // A refused reading does not get to report its health either. The staleness badge and the
+  // poller's stale/recovered alerts both describe the FEED, and the feed on this box is another
+  // kit's -- so a page that refuses the numbers must not carry an alert storm about them. The
+  // panel's own line is the signal. (The masthead already says "No Reading" in amber when there is
+  // no dish at all, so dropping the badge loses nothing.)
+  const dishOk = !dishRefusal(snap.dish);
+
   const stale = [];
   let urgent = false;
-  if (snap.dish_stale || !snap.dish) {
+  if (dishOk && snap.dish_stale) {
     stale.push("dish");
     if (!snap.dish_ts || (now - snap.dish_ts) > 600) urgent = true;
   }
-  if (snap.delilah_stale || !snap.dish) {
+  // Ada 09-Nov-2026 this read `!snap.dish` -- a missing DISH marked the ROUTER stale, which is a
+  // copy-paste fault, not a design: the two devices are independent feeds.
+  if (snap.delilah_stale || !snap.delilah) {
     stale.push("router");
     if (!snap.delilah_ts || (now - snap.delilah_ts) > 600) urgent = true;
   }
@@ -1953,7 +1963,6 @@ async function load() {
   // gate covers them too: another kit's obstruction map on the van page is the same mistake as
   // another kit's throughput. #skyboxes is hidden rather than re-rendered, so the map <img> and its
   // listeners survive (load() runs every 15s and must not reset the image).
-  const dishOk = !dishRefusal(snap.dish);
   const skyboxes = $("skyboxes");
   if (skyboxes) skyboxes.style.display = dishOk ? "" : "none";
   if (snap.dish && dishOk) {
