@@ -767,6 +767,13 @@ async function loadVersion() {
 }
 const HISTORY_HOURS = 16;
 
+// Ada 09-Nov-2026 the position panel and the charts ask for DIFFERENT windows, on purpose (Matt:
+// "the whole trip's track rather than the last day"). The charts answer "how has the link been
+// lately", which is a recent question with a fixed window. The track answers "where have we been",
+// which is cumulative -- a trip is not 16 hours long, and a day of driving drawn as a dot is worse
+// than useless. 0 = everything the poller holds; the server bounds the response itself.
+const TRACK_HOURS = 0;
+
 // Ada 23-Oct-2026 150px was not enough for the throughput chart's axis. uPlot
 // chooses its y-axis increment from the PIXEL SPACE available, and a range that
 // crosses zero at ~83px of plot height collapses to a single tick at 0 -- the
@@ -1314,10 +1321,18 @@ function trackPanel(t, places) {
   const y0 = Math.min.apply(null, ys), y1 = Math.max.apply(null, ys);
   const spanX = x1 - x0, spanY = y1 - y0;
 
+  // Ada 09-Nov-2026 a per-step floor on the travelled distance. Summing every step was fine over a
+  // 16 h window; over a whole trip it is not, because a parked van's GNSS jitter accumulates. Once
+  // the panel asked for the whole record this read "0.11 km travelled" for a van that has not moved
+  // -- 2.8 days of a few-centimetre wobble summing to a journey that never happened. Horizontal
+  // accuracy here is a few metres, so a step shorter than that is not travel.
+  const STEP_FLOOR_M = 15;
   let dist = 0;
-  for (let i = 1; i < lat.length; i++) dist += haversineM(lat[i - 1], lon[i - 1], lat[i], lon[i]);
+  for (let i = 1; i < lat.length; i++) {
+    const step = haversineM(lat[i - 1], lon[i - 1], lat[i], lon[i]);
+    if (step >= STEP_FLOOR_M) dist += step;
+  }
   const still = dist < 50;
-
   // Ada 06-Nov-2026 a floor on the scale. Fitting the box to the data magnifies a parked van's
   // centimetre-level jitter into a line across the panel, which reads as a journey that never
   // happened. Below ~220 m the track is drawn at a fixed scale, centred, and called what it is.
@@ -1353,10 +1368,21 @@ function trackPanel(t, places) {
     hour: "2-digit", minute: "2-digit" }) : "\u2014";
   const km = dist / 1000;
 
+  // Ada 09-Nov-2026 the caption reports the SPAN OF THE FIXES, not the window that was requested:
+  // the panel now asks for the whole record, so the old Math.round(t.hours) would read "over 0 h".
+  // And when the server thinned the track it says how many of how many -- the number of fixes is a
+  // claim about the data, so a bounded response must not read as a short record.
+  const spanH = ts.length > 1 ? (ts[ts.length - 1] - ts[0]) / 3600 : null;
+  const spanTxt = spanH == null ? ""
+    : " over " + (spanH >= 48 ? (spanH / 24).toFixed(1) + " days" : Math.round(spanH) + " h");
+  const countTxt = (t.total > t.count)
+    ? fmtInt(t.count) + " of " + fmtInt(t.total) + " fixes"
+    : t.count + (t.count === 1 ? " fix" : " fixes");
+
   return '<div class="chart">'
     + '<h3>position</h3>'
     + '<p class="muted" style="margin:-.3rem 0 .8rem">'
-    + esc(t.count + (t.count === 1 ? " fix" : " fixes") + " over " + Math.round(t.hours) + " h")
+    + esc(countTxt + spanTxt)
     + " &middot; " + (still ? "no movement" : km.toFixed(2) + " km travelled")
     + " &middot; " + esc(fmtT(first)) + " &rarr; " + esc(fmtT(last))
     + "</p>"
@@ -1535,7 +1561,7 @@ async function loadHistory() {
     // either must not take the charts down with it, so they are fetched alongside and defaulted.
     const [hr, tr, pr] = await Promise.all([
       fetch(url, { cache: "no-store" }),
-      fetch(TRACK_URL + "?hours=" + HISTORY_HOURS + "&t=" + Date.now(), { cache: "no-store" }),
+      fetch(TRACK_URL + "?hours=" + TRACK_HOURS + "&t=" + Date.now(), { cache: "no-store" }),
       fetch(PLACES_URL + "?t=" + Date.now(), { cache: "no-store" }),
     ]);
     const h = await hr.json();
