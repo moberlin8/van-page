@@ -1450,7 +1450,10 @@ function routerSection(r) {
        so a place accumulates visits and - once surveyed - which WAN won there. -->
   <div class="csquare list" id="place-tile">
     <div class="btitle">location</div>
-    <span class="info" tabindex="0" role="button" aria-label="About location"><span class="tip" role="tooltip">
+    <!-- Ada 09-Nov-2026 the literal "i" was missing here (Matt spotted the empty circle): every
+         other info circle in the page carries one, and it is the only thing drawn inside the ring.
+         The accessible name comes from aria-label, so nothing announced it as missing. -->
+    <span class="info" tabindex="0" role="button" aria-label="About location">i<span class="tip" role="tooltip">
       <p><b>One name, two actions.</b> Type a name and press <b>Mark Location</b> to record
         where you are. The same name will start a WAN survey when that lands, so a place
         collects visits and, in time, which connection won there.</p>
