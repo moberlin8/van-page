@@ -24,10 +24,14 @@ rewrites snapshot.json every tick, so a dismissal kept there would be
 overwritten and the closed alert would come back. Routes: GET /dismissed
 (no-store), POST /dismiss {id}, POST /dismiss_all {ids:[...]}.
 """
+import datetime
 import http.server
 import json
+import math
 import os
 import posixpath
+import shlex
+import subprocess
 import socketserver
 import sqlite3
 import tempfile
@@ -36,6 +40,43 @@ import time
 import urllib.parse
 
 ROOT = "/srv/van/data"
+
+# Ada 06-Nov-2026 the page's own commit, so the bottom of the page can say which build is being
+# looked at (Matt). The page is served from a git working tree that is bind-mounted into the
+# homepage container, so the answer is read from that tree at request time rather than baked into
+# the HTML: a hard-coded SHA is stale the moment the commit that writes it lands - which is
+# exactly the commit you would want to see.
+PAGE_REPO = "/srv/van"
+_VERSION_CACHE = {"at": 0.0, "value": None}
+
+
+def page_version(repo=None, max_age=10.0):
+    """{'commit': short sha, 'full': sha, 'branch': name} for the page's working tree.
+
+    Cached for `max_age` seconds so a page load does not shell out to git on every request, and
+    `max_age=0` forces a fresh read (the tests use that). A directory that is not a repo, or a
+    missing git, returns {'error': ...} rather than raising: the footer is decoration, and it must
+    never be able to break the page.
+    """
+    repo = PAGE_REPO if repo is None else repo
+    now = time.time()
+    if max_age and _VERSION_CACHE["value"] is not None and now - _VERSION_CACHE["at"] < max_age:
+        return _VERSION_CACHE["value"]
+
+    def git(*args):
+        return subprocess.run(["git", "-C", repo] + list(args), capture_output=True,
+                              text=True, timeout=5).stdout.strip()
+
+    try:
+        full = git("rev-parse", "HEAD")
+        if not full:
+            return {"error": "not a git working tree: %s" % repo}
+        value = {"commit": full[:7], "full": full,
+                 "branch": git("rev-parse", "--abbrev-ref", "HEAD")}
+    except (OSError, subprocess.SubprocessError) as e:
+        return {"error": "cannot read the page's commit: %s" % e}
+    _VERSION_CACHE.update({"at": now, "value": value})
+    return value
 DB = os.path.join(ROOT, "van.db")
 HOST = "127.0.0.1"
 PORT = 8891
@@ -54,6 +95,415 @@ PORT = 8891
 # on the poller's data stays exactly as it was.
 DISMISSED = "/home/ada/van/var/dismissed.json"
 DISMISS_WINDOW_S = 26 * 3600
+
+# Ada 06-Nov-2026 places: a name, the visits to it, and the surveys run there (plan §15l).
+#
+# Why a separate database. van.db belongs to the poller and van-data.service reads it with
+# ReadOnlyPaths=/srv/van/data on purpose, so this server cannot write a mark into it - and should
+# not be able to. The marks are the server's own state, so they live with the other writable state
+# in var/, next to dismissed.json. The GPS track stays in van.db and is read here read-only.
+PLACES_DB = "/home/ada/van/var/places.db"
+
+# Matt's threshold, 06-Nov-2026: 3/4 mile, and it cuts both ways. A name that already exists whose
+# fix is further than this from every visit to that place is an ERROR, not a new place - "same name,
+# different town" is the mistake this exists to catch. A NEW name whose fix lands within this of an
+# existing place is refused as well (Matt, 09-Nov-2026): that is the same town under a different
+# name, which is how near-duplicates get made. One threshold, one meaning: what you type is either
+# the place it already is, or a place somewhere else.
+PLACE_RADIUS_M = 1207.0
+
+PLACES_SCHEMA = """
+CREATE TABLE IF NOT EXISTS place (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    name     TEXT UNIQUE NOT NULL,
+    first_ts TEXT,
+    last_ts  TEXT
+);
+CREATE TABLE IF NOT EXISTS visit (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT,
+    place_id INTEGER,
+    lat      REAL,
+    lon      REAL,
+    alt      REAL,
+    sats     INTEGER,
+    fix      INTEGER,
+    source   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_visit_place ON visit(place_id);
+CREATE TABLE IF NOT EXISTS survey (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts       TEXT,
+    place_id INTEGER,
+    results  TEXT,
+    run_id   TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_survey_place ON survey(place_id);
+"""
+
+# Ada 06-Nov-2026 the survey table gained run_id after it already existed in the live file, so the
+# column is added rather than assumed. The unique index is what makes filing a run idempotent: the
+# result is read on every page poll, and only the first read may write it.
+SURVEY_MIGRATIONS = (
+    "ALTER TABLE survey ADD COLUMN run_id TEXT",
+    "CREATE UNIQUE INDEX IF NOT EXISTS idx_survey_run ON survey(run_id)",
+)
+
+
+def haversine_m(lat1, lon1, lat2, lon2):
+    """Great-circle distance in metres. Good enough at 1.2 km; the earth is not a sphere."""
+    r = 6371000.0
+    p1, p2 = math.radians(lat1), math.radians(lat2)
+    dp, dl = p2 - p1, math.radians(lon2 - lon1)
+    h = math.sin(dp / 2) ** 2 + math.cos(p1) * math.cos(p2) * math.sin(dl / 2) ** 2
+    return 2 * r * math.asin(math.sqrt(h))
+
+
+def places_con(path=None):
+    con = sqlite3.connect(path or PLACES_DB, timeout=10)
+    con.executescript(PLACES_SCHEMA)
+    for stmt in SURVEY_MIGRATIONS:
+        try:
+            con.execute(stmt)
+        except sqlite3.Error:
+            pass  # already there
+    con.commit()
+    return con
+
+
+def latest_fix(db=None):
+    """The newest GPS sample, or None.
+
+    Read-only on purpose: van.db is the poller's file. A missing table (before the first drain) is
+    "no fix", not an error - the page has to be able to say "no fix yet" without a 500.
+    """
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % (db or DB), uri=True, timeout=5)
+        try:
+            row = con.execute(
+                "SELECT ts, lat, lon, alt, sats, fix FROM gps ORDER BY ts DESC LIMIT 1").fetchone()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        return None
+    if not row or row[1] is None or row[2] is None:
+        return None
+    return {"ts": row[0], "lat": row[1], "lon": row[2], "alt": row[3], "sats": row[4], "fix": row[5]}
+
+
+def place_mark(name, now=None, db=None, places_db=None, source="mark"):
+    """(http status, body) for POST /place/mark.
+
+    The rules, all of them Matt's (06-Nov-2026):
+      * no fix, no mark - a null position is worse than a gap;
+      * an existing name within 3/4 mile of any of its visits is the same place, and this is a visit;
+      * an existing name further away is an ERROR, and the error says how far and when;
+      * a new name that lands within 3/4 mile of a different place is an ERROR too (Matt,
+        09-Nov-2026): it used to be created with a warning, and a warning stops nobody - the first
+        near-duplicate on record, "Bob", landed 2 m from "Ada's Home".
+    """
+    name = (name or "").strip()
+    if not name:
+        return 400, {"error": "name required"}
+    if len(name) > 64:
+        return 400, {"error": "name too long (64 characters max)"}
+
+    fix = latest_fix(db)
+    if not fix:
+        return 409, {"error": "no fix",
+                     "detail": "Delilah has no GPS fix right now, so there is no position to mark. "
+                               "A cold start takes a few minutes; indoors it may never fix."}
+
+    con = places_con(places_db)
+    try:
+        row = con.execute("SELECT id, name FROM place WHERE name = ? COLLATE NOCASE",
+                          (name,)).fetchone()
+        if row:
+            place_id, stored = row
+            visits = con.execute(
+                "SELECT ts, lat, lon FROM visit WHERE place_id = ?", (place_id,)).fetchall()
+            nearest = None
+            for ts, lat, lon in visits:
+                if lat is None or lon is None:
+                    continue
+                d = haversine_m(fix["lat"], fix["lon"], lat, lon)
+                if nearest is None or d < nearest[0]:
+                    nearest = (d, ts, lat, lon)
+            if nearest and nearest[0] > PLACE_RADIUS_M:
+                return 409, {
+                    "error": "too far",
+                    "name": stored,
+                    "distance_m": round(nearest[0]),
+                    "radius_m": PLACE_RADIUS_M,
+                    "nearest_ts": nearest[1],
+                    "nearest_lat": nearest[2],
+                    "nearest_lon": nearest[3],
+                    "detail": "\"%s\" is already a place %.1f mi from here. Use a different name, "
+                              "or mark it where it was." % (stored, nearest[0] / 1609.344),
+                }
+            con.execute(
+                "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
+                " VALUES (?,?,?,?,?,?,?,?)",
+                (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"],
+                 fix["fix"], source))
+            con.execute("UPDATE place SET last_ts = ? WHERE id = ?", (fix["ts"], place_id))
+            con.commit()
+            return 200, {"ok": True, "place": {"id": place_id, "name": stored},
+                         "visit_ts": fix["ts"], "distance_m": round(nearest[0]) if nearest else None,
+                         "new_place": False}
+
+        # A new name standing on top of an existing place is REFUSED (Matt, 09-Nov-2026). It used
+        # to be created with a warning; the rule is now the far-away rule read the other way round,
+        # because "same place, different name" makes the same mess as "same name, different place".
+        # Nearest wins, so the detail names the place the user probably meant.
+        nearest = None
+        for pid, pname, ts, lat, lon in con.execute(
+                "SELECT p.id, p.name, v.ts, v.lat, v.lon FROM place p"
+                " JOIN visit v ON v.place_id = p.id"):
+            if lat is None or lon is None:
+                continue
+            d = haversine_m(fix["lat"], fix["lon"], lat, lon)
+            if nearest is None or d < nearest[0]:
+                nearest = (d, pname, pid, ts)
+        if nearest and nearest[0] <= PLACE_RADIUS_M:
+            # Metres, not "0.0 mi": the near-duplicate that started this was two metres away.
+            away = (("%.0f m" % nearest[0]) if nearest[0] < 161.0
+                    else ("%.1f mi" % (nearest[0] / 1609.344)))
+            return 409, {
+                "error": "too close",
+                "name": name,
+                "existing": nearest[1],
+                "existing_id": nearest[2],
+                "distance_m": round(nearest[0]),
+                "radius_m": PLACE_RADIUS_M,
+                "nearest_ts": nearest[3],
+                "detail": "\"%s\" is already a place %s from here. Use that name, or mark "
+                          "this one where it belongs." % (nearest[1], away),
+            }
+        cur = con.execute("INSERT INTO place (name, first_ts, last_ts) VALUES (?,?,?)",
+                          (name, fix["ts"], fix["ts"]))
+        place_id = cur.lastrowid
+        con.execute(
+            "INSERT INTO visit (ts, place_id, lat, lon, alt, sats, fix, source)"
+            " VALUES (?,?,?,?,?,?,?,?)",
+            (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"], fix["fix"], source))
+        con.commit()
+        return 201, {"ok": True, "place": {"id": place_id, "name": name},
+                     "visit_ts": fix["ts"], "new_place": True}
+    finally:
+        con.close()
+
+
+# Ada 06-Nov-2026 the WAN survey (plan §15j). The engine runs on Delilah, detached, because its
+# last step can drop the link that started it; this server only starts it and reads the answer.
+SURVEY_LAST = "/overlay/survey/last.json"
+SURVEY_SCRIPT = "/overlay/survey/wan-survey.py"
+SURVEY_CACHE = {"at": 0.0, "value": None}
+
+
+def _delilah(cmd, timeout=20):
+    """Run one command on Delilah.
+
+    -F /dev/null on purpose: this service runs in a systemd mount namespace (ReadOnlyPaths on
+    /srv/van/data), and in that namespace ssh refuses the host's own /etc/ssh/ssh_config.d include
+    with "Bad owner or permissions" even though the file is root:root 644. The include only sets
+    keepalive options, which a 15-second control command does not need, so the system config is
+    skipped rather than fought with.
+    """
+    return subprocess.run(["ssh", "-F", "/dev/null", "-o", "BatchMode=yes",
+                           "-o", "ConnectTimeout=8", "root@delilah", cmd],
+                          capture_output=True, text=True, timeout=timeout)
+
+
+def ensure_place(name, places_db=None):
+    """The id for `name`, creating the place if it is new. No visit: a survey needs no fix."""
+    con = places_con(places_db)
+    try:
+        row = con.execute("SELECT id FROM place WHERE name = ? COLLATE NOCASE", (name,)).fetchone()
+        if row:
+            return row[0]
+        cur = con.execute("INSERT INTO place (name, first_ts, last_ts) VALUES (?,?,?)",
+                          (name, None, None))
+        con.commit()
+        return cur.lastrowid
+    finally:
+        con.close()
+
+
+def start_survey(name, places_db=None, db=None):
+    """(status, body) for POST /survey/run: file the place, then launch the engine detached."""
+    name = (name or "").strip()
+    if not name:
+        return 400, {"error": "name required"}
+    if len(name) > 64:
+        return 400, {"error": "name too long (64 characters max)"}
+
+    # The place exists from the moment the survey is asked for. A survey does not need a fix, so a
+    # missing one is not a reason to refuse - but a name that belongs to a place far away, or a new
+    # name standing on top of one, is. Both are place_mark's refusals and both come back to the page
+    # untouched: ensure_place() below must not quietly create the place a refusal just rejected.
+    status, body = place_mark(name, db=db, places_db=places_db, source="survey")
+    if status == 409 and body.get("error") in ("too far", "too close"):
+        return status, body
+    if status not in (200, 201):
+        ensure_place(name, places_db)
+
+    run_id = "%d" % int(time.time())
+    # start-stop-daemon, not "setsid nohup ... &": this router has neither setsid nor nohup, and a
+    # backgrounded command in a login shell returns 0 whether or not it started - which is how a
+    # survey that never ran looked like a survey that had. -b detaches, -m writes the pidfile, and
+    # the exit status is the launcher's, so a failure is a failure.
+    cmd = ("rm -f /tmp/wan-survey.pid; start-stop-daemon -S -b -m -p /tmp/wan-survey.pid "
+           "-x /usr/bin/python3 -- %s %s %s"
+           % (SURVEY_SCRIPT, shlex.quote(name), shlex.quote(run_id)))
+    try:
+        r = _delilah(cmd, timeout=25)
+    except Exception as e:
+        return 503, {"error": "cannot reach Delilah: %s" % e}
+    if r.returncode != 0:
+        return 503, {"error": "cannot start the survey: %s" % (r.stderr or "").strip()[:200]}
+    SURVEY_CACHE.update({"at": 0.0, "value": None})
+    return 202, {"ok": True, "run_id": run_id, "name": name, "state": "running"}
+
+
+def _file_survey(run, places_db=None):
+    """Store a finished run against its place. Idempotent: run_id is unique."""
+    run_id = run.get("run_id")
+    name = (run.get("name") or "").strip()
+    if not run_id or not name:
+        return
+    try:
+        con = places_con(places_db)
+        try:
+            row = con.execute("SELECT id FROM place WHERE name = ? COLLATE NOCASE",
+                              (name,)).fetchone()
+            con.execute("INSERT OR IGNORE INTO survey (ts, place_id, results, run_id)"
+                        " VALUES (?,?,?,?)",
+                        (run.get("finished") or run.get("updated"),
+                         row[0] if row else None, json.dumps(run), run_id))
+            con.commit()
+        finally:
+            con.close()
+    except sqlite3.Error:
+        pass
+
+
+def survey_state(max_age=5.0, places_db=None):
+    """The latest run, read from Delilah. Cached briefly: the page polls every 15s.
+
+    A read that fails keeps the last answer and marks it stale, because during a survey the router
+    is expected to be unreachable for a moment - that is the switch, not a fault.
+    """
+    now = time.time()
+    if max_age and SURVEY_CACHE["value"] is not None and now - SURVEY_CACHE["at"] < max_age:
+        return SURVEY_CACHE["value"]
+    try:
+        r = _delilah("cat " + SURVEY_LAST, timeout=15)
+        if r.returncode != 0 or not r.stdout.strip():
+            raise RuntimeError((r.stderr or "no output").strip()[:200])
+        value = json.loads(r.stdout)
+    except Exception as e:
+        prev = SURVEY_CACHE["value"]
+        value = dict(prev) if prev else {"state": "unknown"}
+        value["stale"] = True
+        value["error"] = str(e)[:200]
+    if value.get("state") == "done":
+        _file_survey(value, places_db)
+    SURVEY_CACHE.update({"at": now, "value": value})
+    return value
+
+
+# Ada 06-Nov-2026 the GPS track for the history page (plan §15k/§15l). A separate reader from
+# read_history() because the gps table's ts is the GPS's own ISO-8601 UTC string, not the epoch
+# float every other table uses - the whole point of it being the fix's clock rather than the
+# router's. Comparing it to a float would silently return nothing.
+def read_track(hours=24, db=None):
+    """Columnar track for the last `hours`, oldest first."""
+    db = DB if db is None else db
+    if not os.path.exists(db):
+        return {"error": "no history database yet"}
+    since = time.time() - hours * 3600
+    since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+    try:
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
+        try:
+            rows = con.execute(
+                "SELECT ts, lat, lon, alt, speed, sats FROM gps WHERE ts >= ? ORDER BY ts ASC",
+                (since_iso,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return {"error": "cannot read the track: %s" % e}
+
+    out = {"hours": hours, "count": len(rows), "ts": [], "lat": [], "lon": [],
+           "alt": [], "speed": [], "sats": []}
+    for ts, lat, lon, alt, speed, sats in rows:
+        try:
+            epoch = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
+                tzinfo=datetime.timezone.utc).timestamp()
+        except (TypeError, ValueError):
+            continue
+        out["ts"].append(epoch)
+        out["lat"].append(lat)
+        out["lon"].append(lon)
+        out["alt"].append(alt)
+        out["speed"].append(speed)
+        out["sats"].append(sats)
+    out["count"] = len(out["ts"])
+    return out
+
+
+# Ada 06-Nov-2026 the survey history for the report page (plan §15j). The runs are filed in
+# places.db as they finish, so this is a read of what already happened rather than a live query.
+def read_surveys(limit=20, places_db=None):
+    try:
+        con = places_con(places_db)
+        try:
+            rows = con.execute(
+                "SELECT s.id, s.ts, s.run_id, p.name, s.results FROM survey s"
+                " LEFT JOIN place p ON p.id = s.place_id ORDER BY s.id DESC LIMIT ?",
+                (limit,)).fetchall()
+        finally:
+            con.close()
+    except sqlite3.Error as e:
+        return {"error": "cannot read surveys: %s" % e}
+    out = []
+    for sid, ts, run_id, name, results in rows:
+        try:
+            d = json.loads(results or "{}")
+        except ValueError:
+            d = {}
+        out.append({"id": sid, "ts": ts, "run_id": run_id, "name": name,
+                    "winner": d.get("winner_label"), "state": d.get("state"),
+                    "results": d.get("results") or [], "swept": d.get("swept") or [],
+                    "switch": d.get("switch") or {}, "cost_bytes": d.get("cost_bytes"),
+                    "configured": d.get("configured") or [], "visible": d.get("visible") or []})
+    return {"surveys": out}
+
+
+def read_places(places_db=None, db=None):
+    """Every place with its visit and survey counts, newest visit first."""
+    try:
+        con = places_con(places_db)
+    except sqlite3.Error as e:
+        return {"error": "cannot open places: %s" % e}
+    try:
+        rows = con.execute(
+            "SELECT p.id, p.name, p.first_ts, p.last_ts,"
+            " (SELECT COUNT(*) FROM visit v WHERE v.place_id = p.id),"
+            " (SELECT COUNT(*) FROM survey s WHERE s.place_id = p.id),"
+            " (SELECT v.lat FROM visit v WHERE v.place_id = p.id ORDER BY v.ts DESC LIMIT 1),"
+            " (SELECT v.lon FROM visit v WHERE v.place_id = p.id ORDER BY v.ts DESC LIMIT 1)"
+            " FROM place p ORDER BY p.last_ts DESC").fetchall()
+    finally:
+        con.close()
+    return {
+        "radius_m": PLACE_RADIUS_M,
+        "latest_fix": latest_fix(db),
+        "places": [{"id": r[0], "name": r[1], "first_ts": r[2], "last_ts": r[3],
+                    "visits": r[4], "surveys": r[5], "lat": r[6], "lon": r[7]} for r in rows],
+    }
+
 
 
 def read_dismissed(path=None):
@@ -239,26 +689,46 @@ def render_obstruction_map():
     return data, None
 
 
-def read_history(hours, fields):
-    """Columnar history from van.db. Returns (payload_dict, error_str)."""
-    if not os.path.exists(DB):
-        return None, "no history database yet"
-    want = [f for f in fields if f in FIELDS]
-    if not want:
-        return None, "no usable fields requested"
+# Ada 06-Nov-2026 workstream D: the router's own history, same columnar contract as the dish.
+# The dish table is all numbers; the router's carries state words too (active path, SSID, APN),
+# which must come back as text rather than being forced through float().
+FIELDS_ROUTER = {c: c for c in (
+    "signal_dbm", "noise_dbm", "bitrate", "link_quality", "channel", "wwan_uptime",
+    "kmwan_level", "kmwan_metric", "csq", "temp_c", "load1", "mem_avail", "mem_total",
+    "uptime", "rx_bytes", "tx_bytes", "sim_slot", "traffic_sim1", "traffic_sim2", "cell_ok",
+)}
+FIELDS_ROUTER_TEXT = {c: c for c in ("ssid", "kmwan_active", "qcsq", "cereg", "cops", "apn")}
+HISTORY_TABLES = {
+    "dish": {"fields": FIELDS, "text": set()},
+    "router": {"fields": dict(FIELDS_ROUTER, **FIELDS_ROUTER_TEXT),
+               "text": set(FIELDS_ROUTER_TEXT)},
+}
 
-    cols = ", ".join(["ts"] + [FIELDS[f] for f in want])
+
+def read_history(hours, fields, table="dish", db=None):
+    """Columnar history from van.db. Returns (payload_dict, error_str)."""
+    db = DB if db is None else db
+    spec = HISTORY_TABLES.get(table)
+    if spec is None:
+        return None, "unknown table %r (have: %s)" % (table, ", ".join(sorted(HISTORY_TABLES)))
+    if not os.path.exists(db):
+        return None, "no history database yet"
+    want = [f for f in fields if f in spec["fields"]]
+    if not want:
+        return None, "no usable fields requested for %s: field not stored" % table
+
+    cols = ", ".join(["ts"] + [spec["fields"][f] for f in want])
     since = time.time() - hours * 3600
 
     # mode=ro: never create or write the poller's file. uri=True is required for
     # the query-string form; timeout lets a poll in flight finish first.
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True, timeout=10)
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
     except sqlite3.Error as e:
         return None, "cannot open history: %s" % e
     try:
         rows = con.execute(
-            "SELECT %s FROM dish WHERE ts >= ? ORDER BY ts ASC" % cols, (since,)
+            "SELECT %s FROM %s WHERE ts >= ? ORDER BY ts ASC" % (cols, table), (since,)
         ).fetchall()
     except sqlite3.Error as e:
         return None, "cannot read history: %s" % e
@@ -276,7 +746,10 @@ def read_history(hours, fields):
     out = {"hours": hours, "count": len(rows),
            "from": rows[0][0], "to": rows[-1][0], "ts": [r[0] for r in rows]}
     for i, f in enumerate(want):
-        out[f] = [None if r[i + 1] is None else float(r[i + 1]) for r in rows]
+        if f in spec["text"]:
+            out[f] = [r[i + 1] for r in rows]
+        else:
+            out[f] = [None if r[i + 1] is None else float(r[i + 1]) for r in rows]
     return out, None
 
 
@@ -287,6 +760,76 @@ def read_history(hours, fields):
 # The dish does not report this -- it is not in the gRPC status fields -- so it
 # is a constant here. Change it if the account's billing day changes.
 BILLING_DAY = 25
+
+# Ada 06-Nov-2026 the one manual figure in this file, scoped to the period it belongs to.
+# The database's first dish sample is 20-Oct-2026, so the Oct 21-24 roaming traffic has no
+# rows and was added as a flat 15.8 GB (split by the down/up ratio of the real Oct 22-24
+# data). It was added to EVERY period, which from 25-Oct meant counting the previous
+# cycle's usage into this one: the page read 68.5 GB where the account read 51 GB, and the
+# lump is the whole gap. It is now applied only when the period actually contains those days.
+MANUAL_WINDOW = ("2026-10-21", "2026-10-25")   # UTC, [start, end)
+MANUAL_TOTAL = 15.8e9
+MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
+
+# Ada 06-Nov-2026 the van's own dish, and the only terminal /van may count.
+# Matt: "ignore data from BigBoyDish, and do not show BigBoyDish data on the Van Page." Two
+# Starlink terminals answer the same address, and this box has spent the cycle reading Geddy's
+# kit over the home path while the van's dish sat powered off on the WAN jack. Their counters
+# have unrelated baselines, so one total across both is mostly someone else's usage.
+# Entries are matched against terminal_group(): the stored dish_id, or the firmware string for
+# rows written before the poller stored one. EMPTY MEANS NOTHING IS ATTRIBUTED, which is the
+# honest state until EvilDish is up and its identity is confirmed - a number nobody can defend
+# is worse than no number. To attribute, list the kit here (or pass van_ids= in a test).
+VAN_DISH_IDS = ()
+
+
+# Ada 06-Nov-2026 which terminal a dish row came from. Two Starlink terminals answer the same
+# tcp address, so the tile follows whichever wins the route and their counters have unrelated
+# baselines; summing across a switch counts the difference between two kits as traffic.
+# `dish_id` is the exact answer once the poller stores it (06-Nov onward). Before that the
+# firmware string is the only marker that exists, so it is the fallback - coarse, but it is the
+# difference that produced the 0.78 GB of phantom in the 06-Nov reconciliation.
+def terminal_group(sw_version, dish_id):
+    """Identity to group usage by: the stored device id, else the firmware string, else None."""
+    if dish_id:
+        return dish_id
+    if sw_version:
+        return sw_version
+    return None
+
+
+def sim_usage(con):
+    """Latest SIM-meter row per slot: what the router has seen since the cycle began.
+
+    Ada 06-Nov-2026 Task 4's meter writes a row per SIM per poll, rolling the counter's peak
+    forward across a module re-init, so the newest row per slot carries the cycle figure the
+    page shows for SIM2. Absent table, absent data: a store from before the meter simply
+    reports nothing rather than failing the whole usage response.
+    """
+    if not {r[1] for r in con.execute("PRAGMA table_info(sim)")}:
+        return {}
+    out = {}
+    for ts, slot, cs, pb, cb, tb, cap in con.execute(
+            "SELECT ts, slot, cycle_start, period_bytes, carried_bytes, total_bytes,"
+            " cap_bytes FROM sim ORDER BY ts ASC"):
+        out[str(slot)] = {"ts": ts, "cycle_start": cs, "period_bytes": pb,
+                          "carried_bytes": cb, "total_bytes": tb, "cap_bytes": cap}
+    return out
+
+
+def manual_lump_for(start, end):
+    """(down, up) of the un-covered Oct 21-24 roaming, or (0.0, 0.0) if absent.
+
+    `start`/`end` are period bounds as epoch seconds (UTC), inclusive end.
+    """
+    import datetime as _dt
+    w0 = _dt.datetime.strptime(MANUAL_WINDOW[0], "%Y-%m-%d").replace(
+        tzinfo=_dt.timezone.utc).timestamp()
+    w1 = _dt.datetime.strptime(MANUAL_WINDOW[1], "%Y-%m-%d").replace(
+        tzinfo=_dt.timezone.utc).timestamp()
+    if end < w0 or start >= w1:
+        return (0.0, 0.0)
+    return (MANUAL_TOTAL * MANUAL_SPLIT[0], MANUAL_TOTAL * MANUAL_SPLIT[1])
 
 
 def billing_period(now=None):
@@ -307,8 +850,11 @@ def billing_period(now=None):
     return start.timestamp(), end.timestamp()
 
 
-def read_usage():
+def read_usage(db=None, van_ids=None):
     """Total bytes moved in the current billing period.
+
+    `db` defaults to None and resolves the module global in the body, so a test can point
+    it at a temporary store without patching this module's state (see tests/).
 
     Ada 24-Oct-2026 the dish's usage counters are ROLLING, not cumulative: over
     the 2 days in the database usage_down gained 3301 MB and lost 3297 MB, so the
@@ -316,17 +862,29 @@ def read_usage():
     sum of the increases, which is real bytes moved. Small drops lose a little,
     so the result is a slight over-count.
     """
-    if not os.path.exists(DB):
+    if db is None:
+        db = DB
+    if van_ids is None:
+        van_ids = VAN_DISH_IDS
+    if not os.path.exists(db):
         return None, "no database yet"
     start, end = billing_period()
     try:
-        con = sqlite3.connect("file:%s?mode=ro" % DB, uri=True, timeout=10)
+        con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
     except sqlite3.Error as e:
         return None, "cannot open usage: %s" % e
     try:
+        # Ada 06-Nov-2026 select the identity columns only if they exist: the poller migrates
+        # the table on its next tick, and /usage must keep answering in the window before that
+        # (a legacy store groups by firmware string, which is all it has).
+        have = {r[1] for r in con.execute("PRAGMA table_info(dish)")}
+        cols = ["ts", "usage_down", "usage_up"]
+        for name in ("sw_version", "dish_id", "dish_hw"):
+            cols.append(name if name in have else "NULL AS " + name)
         rows = con.execute(
-            "SELECT ts, usage_down, usage_up FROM dish WHERE ts >= ?"
-            " ORDER BY ts ASC", (start,)).fetchall()
+            "SELECT %s FROM dish WHERE ts >= ? ORDER BY ts ASC" % ", ".join(cols),
+            (start,)).fetchall()
+        sims = sim_usage(con)
     except sqlite3.Error as e:
         return None, "cannot read usage: %s" % e
     finally:
@@ -334,26 +892,69 @@ def read_usage():
     if not rows:
         return None, "no samples in this billing period yet"
 
-    down = up = 0.0
-    prev_d = prev_u = None
-    for ts, d, u in rows:
-        if prev_d is not None and d is not None and d > prev_d:
-            down += d - prev_d
-        if prev_u is not None and u is not None and u > prev_u:
-            up += u - prev_u
+    # Ada 06-Nov-2026 accumulate INSIDE each terminal. A switch starts that terminal's own
+    # prev trackers, so the step between two kits' unrelated baselines is never counted.
+    groups = {}
+    for ts, d, u, sw, did, dhw in rows:
+        key = terminal_group(sw, did)
+        g = groups.get(key)
+        if g is None:
+            g = groups[key] = {"id": did, "hw": dhw, "label": key or "unknown",
+                               "down": 0.0, "up": 0.0, "samples": 0,
+                               "first": ts, "last": ts, "prev_down": None, "prev_up": None}
+        if g["prev_down"] is not None and d is not None and d > g["prev_down"]:
+            g["down"] += d - g["prev_down"]
+        if g["prev_up"] is not None and u is not None and u > g["prev_up"]:
+            g["up"] += u - g["prev_up"]
         if d is not None:
-            prev_d = d
+            g["prev_down"] = d
         if u is not None:
-            prev_u = u
+            g["prev_up"] = u
+        if did and not g["id"]:
+            g["id"], g["hw"] = did, dhw
+        g["samples"] += 1
+        g["last"] = ts
+
+    # Ada 06-Nov-2026 count the van's kit only, and say so when there is nothing to count.
+    van_set = {str(v) for v in van_ids}
+    for key, g in groups.items():
+        g["van"] = key in van_set
+    counted = [g for g in groups.values() if g["van"]]
+    if not van_set:
+        attribution = {
+            "van_dish_ids": [],
+            "counted": [],
+            "reason": "no van-dish identity is configured (VAN_DISH_IDS is empty), so no "
+                      "terminal's usage can be attributed to the van's dish",
+        }
+        down = up = None
+    elif not counted:
+        attribution = {
+            "van_dish_ids": sorted(van_set),
+            "counted": [],
+            "reason": "no dish rows in this period belong to the van's kit",
+        }
+        down = up = None
+    else:
+        down = sum(g["down"] for g in counted)
+        up = sum(g["up"] for g in counted)
+        attribution = {"van_dish_ids": sorted(van_set),
+                       "counted": [g["label"] for g in counted],
+                       "reason": "van's kit only"}
+    # the breakdown stays in the response as diagnostics, flagged, so the page can decide
+    # what to render instead of having the decision buried in here
+    terminals = [{k: g[k] for k in ("id", "hw", "label", "van", "down", "up",
+                                    "samples", "first", "last")}
+                 for g in sorted(groups.values(), key=lambda x: x["down"], reverse=True)]
 
     now = time.time()
-    # Ada 01-Nov-2026 add manual Oct 21-24 roaming totals (split by the same
-    # down/up ratio as the real Oct 22-24 data). The dish had no samples before
-    # Oct 22, so those four days are not represented in the DB.
-    manual_down = 15.8e9 * (3.541 / 5.494)
-    manual_up = 15.8e9 * (1.953 / 5.494)
-    down += manual_down
-    up += manual_up
+    # Ada 06-Nov-2026 the lump, only for a period that contains Oct 21-24 (see MANUAL_WINDOW).
+    manual_down, manual_up = manual_lump_for(start, end)
+    if down is None:
+        manual_down = manual_up = 0.0        # an unknown total has nothing to add it to
+    else:
+        down += manual_down
+        up += manual_up
     return {
         "billing_day": BILLING_DAY,
         "period_start": start,
@@ -363,12 +964,28 @@ def read_usage():
         "days_left": max(0, int(round((end - now) / 86400.0))),
         "down": down,
         "up": up,
-        "total": down + up,
+        "total": None if down is None else down + up,
+        # Ada 06-Nov-2026 what the totals are made of, and why they can be null.
+        "attribution": attribution,
+        # Ada 06-Nov-2026 the other metered service, so the tile reads one endpoint: SIM2's
+        # cycle figure as the router's own meter recorded it (the carrier's portal governs).
+        "sim": sims,
         # The database only started collecting on 22-Oct-2026, so the period is
         # covered from then -- the page says so rather than claiming a full month.
         "covered_from": rows[0][0],
         "covered_to": rows[-1][0],
         "samples": len(rows),
+        # Ada 06-Nov-2026 per-terminal detail: the total is the sum of these, so the page can
+        # name which terminal it is reading instead of silently using both.
+        "terminals": terminals,
+        # Ada 06-Nov-2026 say whether the manual figure was counted, and how much of it,
+        # so nobody has to read this file to know what the total is made of.
+        "manual_lump": {
+            "applied": bool(manual_down or manual_up),
+            "down": manual_down,
+            "up": manual_up,
+            "window": "%s..%s" % MANUAL_WINDOW,
+        },
     }, None
 
 
@@ -473,6 +1090,53 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                           json.dumps(body).encode("utf-8"))
             return
 
+        # Ada 06-Nov-2026 Mark Location (plan §15l). The name is the join key between a placemark
+        # and a survey, so this is the cheap half of the pair: no disruption, no data, and it works
+        # whether or not the dish is up.
+        if path == "/place/mark":
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "bad json"}).encode("utf-8"))
+                return
+            try:
+                status, body = place_mark(payload.get("name"))
+            except sqlite3.Error as e:
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write places: %s" % e}).encode("utf-8"))
+                return
+            self.no_store = True
+            self._respond(status, "application/json; charset=utf-8",
+                          json.dumps(body).encode("utf-8"))
+            return
+
+        # Ada 06-Nov-2026 start a WAN survey (plan §15j). Manual only: nothing here runs on a timer,
+        # and the engine is launched detached because its last step can drop the link.
+        if path == "/survey/run":
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            if not isinstance(payload, dict):
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "bad json"}).encode("utf-8"))
+                return
+            try:
+                status, body = start_survey(payload.get("name"))
+            except sqlite3.Error as e:
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write places: %s" % e}).encode("utf-8"))
+                return
+            self.no_store = True
+            self._respond(status, "application/json; charset=utf-8",
+                          json.dumps(body).encode("utf-8"))
+            return
+
         if path == "/history":
             self._respond(405, "application/json; charset=utf-8",
                           json.dumps({"error": "method not allowed"}).encode("utf-8"))
@@ -511,13 +1175,61 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             hours = max(0.25, min(24 * 30, hours))
             fields = [f for f in q.get("fields", [""])[0].split(",") if f]
 
-            payload, err = read_history(hours, fields)
+            table = (q.get("table", ["dish"])[0] or "dish").strip()
+            payload, err = read_history(hours, fields, table=table)
             if err:
                 self._respond(404, "application/json; charset=utf-8",
                               json.dumps({"error": err, "hours": hours}).encode("utf-8"))
             else:
                 self._respond(200, "application/json; charset=utf-8",
                               json.dumps(payload).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/surveys", "/surveys.json"):
+            # Ada 06-Nov-2026 the survey history (plan §15j).
+            q = urllib.parse.parse_qs(u.query)
+            try:
+                limit = int(q.get("limit", ["20"])[0])
+            except ValueError:
+                limit = 20
+            limit = max(1, min(200, limit))
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_surveys(limit)).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/track", "/track.json"):
+            # Ada 06-Nov-2026 the GPS track for the history page (plan §15k).
+            q = urllib.parse.parse_qs(u.query)
+            try:
+                hours = float(q.get("hours", ["24"])[0])
+            except ValueError:
+                hours = 24.0
+            hours = max(0.25, min(24 * 90, hours))
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_track(hours)).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/survey", "/survey.json"):
+            # Ada 06-Nov-2026 the latest survey run, live from Delilah (plan §15j).
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(survey_state()).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/places", "/places.json"):
+            # Ada 06-Nov-2026 the place registry, plus the fix a mark would use right now, so the
+            # page can say "no fix" before the button is pressed rather than after (plan §15l).
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(read_places()).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/version", "/version.json"):
+            # Ada 06-Nov-2026 which build of the page is this (Matt's footer)
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps(page_version()).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/usage", "/usage.json"):
