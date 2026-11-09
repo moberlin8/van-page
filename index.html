@@ -2550,7 +2550,12 @@ function placeMsg(text, cls) {
   const el = $("#place-msg");
   if (!el) return;
   el.textContent = text || "";
-  el.className = cls || "";
+  // Ada 09-Nov-2026 this used to assign `className = cls` outright, which threw away the span's own
+  // `v small` and let it fall back to the section's 28px body size -- the green "survey" message
+  // rendered 2.5x every other value in the tile (measured 28px against 11.2px). Matt: "the green
+  // text for the survey is too large". Every message in this tile had the same fault; the state
+  // class is the part that varies, so the base class stays and the state is added to it.
+  el.className = cls ? "v small " + cls : "v small";
 }
 
 function fixAge(ts) {
@@ -2695,7 +2700,7 @@ async function runSurvey() {
     if (!r.ok) {
       placeMsg(b.detail || b.error || ("HTTP " + r.status), "bad");
     } else {
-      placeMsg("Survey started at " + b.name + ".", "ok");
+      placeMsg("Survey running\u2026", "ok");
       loadSurvey();
       loadPlaces();  // the survey files the place, so the registry changed too
     }
