@@ -18,6 +18,9 @@
     identity was first recorded), so /usage now carries Starlink's own figure for the kit over the
     earlier part of the cycle, scoped to that window in serve-data.py (EVILDISH_PLUG_WINDOW).
     The info tip's Attribution paragraph says so; the page itself was not otherwise touched.
+    Ada 10-Nov-2026 Usage tile's bottom line (Matt): "center the warning line ... If it takes the
+    entire row, then it shouldn't wrap" -> the row is class "status", its value spans the row and is
+    centred, and the type sits at 0.78rem so the longest status string holds one line.
     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
@@ -452,6 +455,18 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage .r .v{font-size:0.85rem}
 .csquare.usage .r .v.big{font-size:1.05rem;margin-right:0}
 .csquare.usage .r{gap:.25rem}
+/* Ada 10-Nov-2026 the usage tile's bottom line is a sentence, not a label/value pair (Matt:
+   "center the warning line at the bottom of the usage ... If it takes the entire row, then it
+   shouldn't wrap"). So the value spans the row and is centred, and the TYPE STEP -- not wrapping --
+   is what fits the longest one. Measured on the live tile: "EvilDish past half its high-speed"
+   is 269px at the sibling rows' 0.85rem against 255px of usable row width (the 271px tile column
+   less the row's 2 x 0.5rem padding), which is why it wrapped to two lines (41px tall against a
+   20.4px line box). 0.78rem measures 247px, and every other status string is shorter, so one line
+   fits with 8px to spare. text-overflow is the fallback for a future longer string: a truncated
+   line beats a wrapped one, which silently grows the square. */
+.csquare.usage .r.status{justify-content:center}
+.csquare.usage .r.status .v{width:100%;text-align:center;white-space:nowrap;font-size:0.78rem;
+  overflow:hidden;text-overflow:ellipsis}
 .csquare.usage{grid-template-rows:auto repeat(9,auto);gap:.18rem}
 /* Ada 06-Nov-2026 the location tile: one name field and one button, stacked because the panel is
    300px wide and a side-by-side pair would squeeze the name to nothing. */
@@ -1450,8 +1465,12 @@ function routerSection(r) {
       <span class="v small" id="usg-cost">&mdash;</span></div>
     <div class="r"><span class="k">At risk</span>
       <span class="v small" id="usg-risk">&mdash;</span></div>
-    <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text. -->
-    <div class="r" style="justify-content:center"><span class="v" id="usg-status">&mdash;</span></div>
+    <!-- Ada 26-Oct-2026 Status moved to the bottom row, centered; green = no text.
+         Ada 10-Nov-2026 the row is class "status", not an inline style (Matt): the value spans the
+         row and is centred, and it is one line by construction -- see the CSS note above.
+         NOTE: no backticks in this block. The panel markup is a JS template literal, so one closes
+         it and the whole inline script stops parsing (seen live: every tile disappeared). -->
+    <div class="r status"><span class="v" id="usg-status">&mdash;</span></div>
   </div>
   <!-- Ada 06-Nov-2026 location: one name field, and the cheap half of the pair (plan §15l).
        Mark Location records the current fix under that name; the survey will use the same field,
