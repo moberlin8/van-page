@@ -23,8 +23,9 @@
     centred, and the type sits at 0.78rem so the longest status string holds one line.
     Ada 10-Nov-2026 Usage tile copy (Matt, his exact string): the amber warning now reads
     "EvilDish exceeds 50% allocation" instead of "EvilDish past half its high-speed".
-    Ada 10-Nov-2026 Usage bars (Matt): SIM2's bar no longer draws its 80% threshold tick -- a lone
-    white line in a nearly empty track read as a stray artifact. The dish's bar keeps its tick.
+    Ada 10-Nov-2026 Usage bars (Matt): no threshold tick on either bar -- SIM2's 80% mark and then
+    the dish's 50% one were "a stray vertical white line" in a track that is mostly empty, so a bar
+    is its track and its fill. The tick CSS rule and usageLevel()'s ticks argument are gone with it.
     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
@@ -444,11 +445,10 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
    so text + row spacing shrink to fit all rows in the 300px panel. */
 .csquare.usage .btitle{font-size:1.05rem}
 /* Ada 06-Nov-2026 the usage tile's level bars: one thin bar per service, a fill that carries
-   the band colour, tick marks at the thresholds that matter (warn, allowance/bank ceiling), and
-   a neutral grey when the tile has no attributable reading to draw.
-   Ada 10-Nov-2026 only the dish's bar draws a tick now: SIM2's 80% mark was removed on Matt's
-   call ("stray vertical white line ... on the SIM2 usage bar. Please remove that") because on a
-   nearly empty track it read as an artifact. The rule below stays -- the dish still uses it. */
+   the band colour, and a neutral grey when the tile has no attributable reading to draw.
+   Ada 10-Nov-2026 neither bar draws a threshold tick any more (Matt, the SIM2 80% mark first and
+   then the dish's 50% one: "a stray vertical white line"). A bar is its track and its fill; the
+   tick rule went with them, and the thresholds now show only as the fill's colour band. */
 .csquare.usage .lvl{display:inline-block;width:7.2rem;height:.5rem;border-radius:.25rem;
   background:rgba(255,255,255,.14);position:relative;overflow:hidden;vertical-align:middle}
 .csquare.usage .lvl .fill{position:absolute;left:0;top:0;bottom:0;border-radius:.25rem;
@@ -456,8 +456,6 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage .lvl.warn .fill{background:var(--warn)}
 .csquare.usage .lvl.bad .fill{background:var(--bad)}
 .csquare.usage .lvl.idle .fill{background:rgba(255,255,255,.18)}
-.csquare.usage .lvl .tk{position:absolute;top:-1px;bottom:-1px;width:1px;
-  background:rgba(255,255,255,.5)}
 .csquare.usage .r .k{font-size:0.8rem}
 .csquare.usage .r .v{font-size:0.85rem}
 .csquare.usage .r .v.big{font-size:1.05rem;margin-right:0}
@@ -2466,13 +2464,12 @@ const BYTES_GB = 1e9;
 // A band is a level, not an action this page takes. "idle" = nothing attributable to draw.
 // The colour lives on a CHILD span so it survives load()'s 15s re-render: keep/restore
 // round-trips innerHTML (children), which is why it is not the element's own class.
-function usageLevel(pct, band, ticks) {
-  const tk = (ticks || []).map(function (p) {
-    const c = Math.max(0, Math.min(100, p));
-    return '<span class="tk" style="left:' + c.toFixed(2) + '%"></span>';
-  }).join("");
+// Ada 10-Nov-2026 no ticks argument (Matt removed the last mark, on the dish's bar): a bar is now
+// its track and its fill, nothing else. The old threshold ticks are in this file's history if a
+// scale mark is ever wanted back.
+function usageLevel(pct, band) {
   const w = Math.max(0, Math.min(100, pct || 0));
-  return '<span class="lvl ' + (band || "idle") + '">' + tk +
+  return '<span class="lvl ' + (band || "idle") + '">' +
     '<span class="fill" style="width:' + w.toFixed(2) + '%"></span></span>';
 }
 function usageBand(usedGB, warnGB, capGB) {
@@ -2504,8 +2501,7 @@ function renderUsage(u) {
   // ---- EvilDish: Starlink Roam 100 GB, cycle 25th -> 24th (the server's billing period) ----
   const dishGB = (u && u.total != null) ? u.total / BYTES_GB : null;
   const dishBand = usageBand(dishGB, DISH_WARN_GB, DISH_PLAN_GB);
-  html("usg-dish-level", usageLevel(dishGB == null ? 0 : (dishGB / DISH_PLAN_GB) * 100,
-    dishBand, [(DISH_WARN_GB / DISH_PLAN_GB) * 100]));
+  html("usg-dish-level", usageLevel(dishGB == null ? 0 : (dishGB / DISH_PLAN_GB) * 100, dishBand));
   txt("usg-dish-used", dishGB == null ? "no reading"
     : dishGB.toFixed(1) + " of " + DISH_PLAN_GB + " GB");
   txt("usg-dish-cycle", (u && u.period_start != null)
@@ -2517,11 +2513,9 @@ function renderUsage(u) {
   const s2 = (u && u.sim && u.sim["2"]) || null;
   const sim2GB = (s2 && s2.total_bytes != null) ? s2.total_bytes / BYTES_GB : null;
   const sim2Band = usageBand(sim2GB, SIM2_WARN_GB, SIM2_BANK_GB);
-  // Ada 10-Nov-2026 SIM2's bar draws no threshold tick (Matt: "a stray vertical white line ... on
-  // the SIM2 usage bar. Please remove that"). Its only mark was the 80% warn threshold, and on a
-  // track that is nearly always empty it read as an artifact -- a lone white line floating in grey
-  // -- not as a scale. The dish's bar keeps its own: it sits where the amber fill's edge lands, so
-  // it is covered the moment usage reaches it, and it reads as part of the fill rather than a stray.
+  // Ada 10-Nov-2026 neither bar draws a threshold mark any more (Matt: the SIM2 80% mark first,
+  // then the dish's 50% one -- "a stray vertical white line"). On a nearly empty track a lone white
+  // line read as an artifact rather than a scale; the bands still colour the fill. See usageLevel().
   html("usg-sim-level", usageLevel(sim2GB == null ? 0 : (sim2GB / SIM2_PLAN_GB) * 100, sim2Band));
   txt("usg-sim-used", sim2GB == null ? "\u2014"
     : sim2GB.toFixed(3) + " of " + SIM2_PLAN_GB + " GB");
