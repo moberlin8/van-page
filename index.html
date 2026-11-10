@@ -13,6 +13,11 @@
     the route and a second terminal answers the same address), and the cost-per-GB figures live in
     the info tip. The old throttle wording is gone: Starlink's own help says Roam 100 GB continues
     at unlimited low-speed, so 100 GB is the allowance and 50 GB is a level, not a cliff.
+    Ada 10-Nov-2026 Usage tile, EvilDish half (Matt): "I show 51Gb for EvilDish in the current
+    billing cycle" -> the dish's identified rows only start 10-Nov 11:46 (the tick the kit's
+    identity was first recorded), so /usage now carries Starlink's own figure for the kit over the
+    earlier part of the cycle, scoped to that window in serve-data.py (EVILDISH_PLUG_WINDOW).
+    The info tip's Attribution paragraph says so; the page itself was not otherwise touched.
     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
@@ -1412,10 +1417,13 @@ function routerSection(r) {
       <p><b>Attribution.</b> The dish&rsquo;s counters are <b>rolling</b>, so a
         total is the sum of the counter&rsquo;s increases, never a reading. Two
         terminals answer the same address, and the tile follows whichever wins the
-        route, so a period is only ever reported for the van&rsquo;s own kit:
-        <b>no reading</b> is what a blank dish row means here, not a failure.
-        SIM2 comes from the router&rsquo;s per-SIM counter, which restarts when
-        the module re-initialises; the carrier&rsquo;s portal governs.</p>
+        route, so a period is only ever reported for the van&rsquo;s own kit. That
+        sum only starts when the kit is identified, so the rest of this cycle rests
+        on <b>Starlink&rsquo;s own figure for EvilDish</b>, not on a guess and not
+        on the other kit&rsquo;s bytes. No reading is what a blank dish row means
+        here, not a failure. SIM2 comes from the router&rsquo;s per-SIM counter,
+        which restarts when the module re-initialises; the carrier&rsquo;s portal
+        governs.</p>
       <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that
         expire unused. The two services differ: the dish&rsquo;s high-speed data does
         <b>not</b> roll over, so whatever is left on the 24th is lost, while SIM2 banks
