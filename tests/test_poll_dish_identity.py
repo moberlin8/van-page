@@ -64,7 +64,8 @@ class TestEnsureColumns(unittest.TestCase):
         con.close()
 
 
-BIGBOY = "ut01188c8b-8281880f-1ac2a7ee"   # the home kit (Matt, 09-Nov-2026)
+BIGBOY = "ut01188c8b-8281880f-1ac2a7ee"     # the home kit (Matt, 09-Nov-2026)
+EVILDISH = "ut41c81581-84505c0f-dac5a295"   # the van's kit, captured 10-Nov-2026
 
 
 class TestVanDishGate(unittest.TestCase):
@@ -75,6 +76,12 @@ class TestVanDishGate(unittest.TestCase):
     whichever wins the route, and it has been the home kit since 05-Nov. The gate is closed by
     default: a terminal nobody has confirmed as the van's is refused, because the alternative
     is showing someone else's dish.
+
+    ## Ada 10-Nov-2026 the id is no longer hypothetical. Matt plugged EvilDish into Delilah's
+    WAN jack and made the jack the preferred path, so the kit on the tile became the van's own
+    and its device_info id could finally be read (11:46:08 EST, hw `mini1_pez_proto1`). Both
+    lists are now populated, which switches the gate from "everything except a known other kit"
+    to strict membership - so the tests below assert membership, not the previous open state.
     """
 
     def test_the_known_other_kit_is_refused(self):
@@ -85,17 +92,16 @@ class TestVanDishGate(unittest.TestCase):
         # allowlist entry, so a copy-paste cannot put the home dish back on the page
         self.assertIs(False, poll.dish_terminal_is_van(BIGBOY, van_ids=(BIGBOY,)))
 
+    def test_the_vans_kit_is_shown(self):
+        self.assertIs(True, poll.dish_terminal_is_van(EVILDISH))
+
     def test_an_allowlisted_terminal_is_the_vans(self):
         self.assertIs(True, poll.dish_terminal_is_van("ut-van-0001", van_ids=("ut-van-0001",)))
 
-    def test_an_unlisted_terminal_is_undecided_while_no_allowlist_is_set(self):
-        # with VAN_DISH_IDS empty, the denylist is the only rule: anything that is not a
-        # known other kit passes, which is what lets the panel come back the moment EvilDish
-        # answers (its id cannot be known before it does).
-        self.assertIs(True, poll.dish_terminal_is_van("ut-someone-else"))
-
-    def test_an_unlisted_terminal_is_refused_once_an_allowlist_exists(self):
-        # filling VAN_DISH_IDS switches the gate to strict mode: membership, not absence
+    def test_an_unlisted_terminal_is_refused_now_the_allowlist_is_set(self):
+        # strict mode: with VAN_DISH_IDS populated, membership decides, so a third kit
+        # nobody has confirmed as the van's is refused rather than shown
+        self.assertIs(False, poll.dish_terminal_is_van("ut-someone-else"))
         self.assertIs(False, poll.dish_terminal_is_van(
             "ut-someone-else", van_ids=("ut-van-0001",)))
 
@@ -103,19 +109,16 @@ class TestVanDishGate(unittest.TestCase):
         self.assertIs(None, poll.dish_terminal_is_van(None))
         self.assertIs(None, poll.dish_terminal_is_van(""))
 
-    def test_nothing_is_the_vans_until_its_id_is_captured(self):
-        # EvilDish's own device_info id has never been recorded: the poller only started
-        # storing ids on 06-Nov, by which time the WAN jack was already dark. Empty is the
-        # honest state -- the gate then runs on the denylist alone, which is what keeps the
-        # home kit off the page without needing an id we do not have.
+    def test_the_two_lists_hold_the_van_and_the_home_kit(self):
         # The serial on the account page (KFV4M02179606WB8) is NOT usable here: the gRPC
         # deviceInfo exposes id/hardware_version/software_version and no serial at all.
-        self.assertEqual((), poll.VAN_DISH_IDS)
+        self.assertIn(EVILDISH, poll.VAN_DISH_IDS)
+        self.assertNotIn(BIGBOY, poll.VAN_DISH_IDS)
         self.assertIn(BIGBOY, poll.OTHER_DISH_IDS)
 
-    def test_the_gate_matches_ids_not_firmware_strings(self):
-        # sw_version changes under a kit on a firmware update, so it is never an identity
-        for listed in poll.OTHER_DISH_IDS:
+    def test_a_firmware_string_is_never_an_identity(self):
+        # sw_version changes under a kit on a firmware update, so it is never listed
+        for listed in poll.VAN_DISH_IDS + poll.OTHER_DISH_IDS:
             self.assertNotRegex(listed, r"\.(mr|cr)\d")
 
     def test_the_poller_stamps_the_verdict_into_the_snapshot(self):
@@ -165,22 +168,15 @@ class TestSnapshotVerdict(unittest.TestCase):
         self.assertIs(False, self._tick(BIGBOY)["van_terminal"])
 
     def test_the_vans_kit_is_serialised_as_shown(self):
-        # the van's id is not known yet, so this borrows the two-list contract to prove the
-        # True path serialises -- the day it is captured, only VAN_DISH_IDS changes
-        saved = poll.VAN_DISH_IDS
-        poll.VAN_DISH_IDS = ("ut-van-0001",)
-        try:
-            self.assertIs(True, self._tick("ut-van-0001")["van_terminal"])
-        finally:
-            poll.VAN_DISH_IDS = saved
+        # the captured id, end to end: the same value the live snapshot carries
+        self.assertIs(True, self._tick(EVILDISH)["van_terminal"])
 
     def test_a_dish_with_no_identity_serialises_as_unknown(self):
         self.assertIsNone(self._tick(None)["van_terminal"])
 
-    def test_a_different_terminal_is_shown_while_no_allowlist_is_set(self):
-        # the case that matters when EvilDish is finally powered: nothing has to be edited
-        # for the panel to come back, because the home kit is the only id we refuse
-        self.assertIs(True, self._tick("ut-evil-dish-unknown-yet")["van_terminal"])
+    def test_an_unknown_terminal_is_refused_now_the_allowlist_is_set(self):
+        # the panel's own refusal path: a kit nobody has confirmed never renders
+        self.assertIs(False, self._tick("ut-evil-dish-unknown-yet")["van_terminal"])
 
 
 if __name__ == "__main__":

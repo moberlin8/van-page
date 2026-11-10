@@ -777,10 +777,13 @@ MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
 # kit over the home path while the van's dish sat powered off on the WAN jack. Their counters
 # have unrelated baselines, so one total across both is mostly someone else's usage.
 # Entries are matched against terminal_group(): the stored dish_id, or the firmware string for
-# rows written before the poller stored one. EMPTY MEANS NOTHING IS ATTRIBUTED, which is the
-# honest state until EvilDish is up and its identity is confirmed - a number nobody can defend
-# is worse than no number. To attribute, list the kit here (or pass van_ids= in a test).
-VAN_DISH_IDS = ()
+# rows written before the poller stored one. EMPTY MEANT NOTHING WAS ATTRIBUTED - the honest state
+# until EvilDish is up and its identity is confirmed. Ada 10-Nov-2026 it is confirmed and listed
+# below, so the dish half of the usage tile counts the van's kit only. Legacy rows with no
+# dish_id group by firmware string, which cannot match an id, so they stay uncounted rather than
+# being attributed to a kit nobody recorded - expect the cycle figure to start small (it counts
+# EvilDish's own samples from 11:46 on 10-Nov) instead of borrowing the home kit's total.
+VAN_DISH_IDS = ("ut41c81581-84505c0f-dac5a295",)   # EvilDish, read off the WAN jack 10-Nov-2026
 
 
 # Ada 06-Nov-2026 which terminal a dish row came from. Two Starlink terminals answer the same

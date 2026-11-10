@@ -242,16 +242,23 @@ def dish_terminal(status):
 #   OTHER_DISH_IDS -- terminals identified as NOT the van's, refused whatever else is configured.
 #                     BigBoyDish, the home kit. This list is what makes Matt's rule ("BigBoyDish
 #                     must never appear on /van") hold, and it is the half we can populate today.
-#   VAN_DISH_IDS   -- the van's own terminals (strict mode). Empty: EvilDish's device_info id has
-#                     never been read -- the poller only started storing ids on 06-Nov, by which
-#                     time the jack was dark -- so listing it would be a guess. While it is empty
-#                     the gate runs on the denylist alone (see dish_terminal_is_van).
+#   VAN_DISH_IDS   -- the van's own terminals (strict mode). CAPTURED 10-Nov-2026: EvilDish's
+#                     device_info id, read off the live dish at 11:46:08 once Matt plugged it into
+#                     Delilah's WAN jack and the jack became the preferred path (kmwan `wan`,
+#                     metric 1; the repeater's routes fell to metric 2). Three consecutive ticks
+#                     carried it -- uptime climbing 518s -> 746s -> 841s -- and the only other kit
+#                     on record stopped at 11:44:36, the tick before the swap. EvilDish is a
+#                     Starlink MINI, so its hardware_version is `mini1_pez_proto1`, not the home
+#                     kit's `rev4_pez_proto1` (the 09-Nov note that "both kits report rev4" was
+#                     written while only the home kit was readable). Populated = strict membership:
+#                     an id not listed here is refused, so a third kit cannot appear either.
 # The kit serial on the Starlink account page (KFV4M02179606WB8 for EvilDish, Matt 09-Nov-2026)
 # CANNOT be used here: the dish's gRPC deviceInfo carries id / hardware_version /
-# software_version and no serial at all. `id` is the only per-kit discriminator -- both kits
-# report hardware_version "rev4_pez_proto1" -- and firmware changes under a kit, so it is not
-# an identity either.
-VAN_DISH_IDS = ()
+# software_version and no serial at all. `id` is the only per-kit discriminator -- hardware_version
+# is not one either (EvilDish is a Mini, `mini1_pez_proto1`; the home kit is `rev4_pez_proto1`) --
+# and firmware changes under a kit, so it is not an identity either.
+# Ada 10-Nov-2026 EvilDish's id, captured from the live dish (see the list's note above).
+VAN_DISH_IDS = ("ut41c81581-84505c0f-dac5a295",)
 OTHER_DISH_IDS = ("ut01188c8b-8281880f-1ac2a7ee",)
 
 
