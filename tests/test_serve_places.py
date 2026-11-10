@@ -1,14 +1,10 @@
-"""## Ada 06-Nov-2026 places: a name is an identity, and 3/4 mile is the test (plan §15l).
+"""## Ada 09-Nov-2026 place-radius tests: the 3/4 mile rule, both directions.
 
-Matt's rules, 06-Nov-2026:
-  * re-using a name means the same place, so it is a new VISIT, not a new place;
-  * a name that exists but whose fix is far away is an ERROR, not a new place;
-  * no fix, no mark - a null position is worse than a gap;
-  * a new name standing on top of an existing place is created, but with a warning.
-
-The threshold is 3/4 mile = 1207 m. These tests pin the boundary, because "how close is close
-enough" is the one number in the design that is arbitrary and therefore the one most likely to be
-quietly changed.
+Matt's threshold cuts both ways (his call, 09-Nov-2026). An existing name whose fix is
+further than the radius from its own visits is "too far"; a NEW name whose fix lands
+within the radius of an existing place is "too close". Both are 409s that write nothing -
+a refusal that leaves a place or a visit behind is not a refusal. The near-duplicate case
+used to be created with a warning, which is how "Bob" came to exist 2 m from "Ada's Home".
 """
 import importlib.util
 import os
@@ -17,176 +13,181 @@ import sys
 import tempfile
 import unittest
 
-ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-sys.path.insert(0, os.path.join(ROOT, "bin"))
+sys.path.insert(0, "/home/ada/van/bin")
 _spec = importlib.util.spec_from_file_location(
-    "serve_data", os.path.join(ROOT, "bin", "serve-data.py"))
+    "serve_data", "/home/ada/van/bin/serve-data.py")
 sd = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(sd)
 
-# 36.0570 N, 78.5228 W - the first fix Delilah produced, so the numbers are real.
-LAT, LON = 36.057033, -78.522835
-# 0.01 deg of latitude is ~1111 m, so 0.0108 is just inside 1207 m and 0.0120 just outside.
-NEAR = LAT + 0.0108
-FAR = LAT + 0.0120
+BASE_LAT, BASE_LON = 36.057025, -78.522822   # Ada's Home, as filed on 07-Nov-2026
+DEG_LAT_M = 111320.0                          # metres per degree of latitude, near enough here
 
 
-def make_db(path, rows):
-    """Replace the track with `rows` - the tests move the van by rewriting the newest fix."""
-    con = sqlite3.connect(path)
-    con.execute("CREATE TABLE IF NOT EXISTS gps (ts TEXT PRIMARY KEY, lat REAL, lon REAL, alt REAL,"
-                " speed REAL, sats INTEGER, hdop REAL, fix INTEGER)")
-    con.execute("DELETE FROM gps")
-    for r in rows:
-        con.execute("INSERT INTO gps VALUES (?,?,?,?,?,?,?,?)", r)
-    con.commit()
-    con.close()
+def at(lat_off_m=0.0):
+    """A synthetic fix `lat_off_m` metres north of the base position."""
+    return {"ts": "2026-11-09T15:00:00Z", "lat": BASE_LAT + lat_off_m / DEG_LAT_M,
+            "lon": BASE_LON, "alt": 157.0, "sats": 12, "fix": 3}
 
 
-class PlacesBase(unittest.TestCase):
+class PlaceRadiusCase(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.mkdtemp()
-        self.van = os.path.join(self.tmp, "van.db")
-        self.places = os.path.join(self.tmp, "places.db")
-        make_db(self.van, [("2026-11-07T01:07:44Z", LAT, LON, 154.8, 0.0, 15, 0.8, 3)])
+        self.dir = tempfile.mkdtemp()
+        self.db = os.path.join(self.dir, "places.db")
+        sd.places_con(self.db).close()          # the schema, so "nothing was written" is readable
+        self._saved_fix = sd.latest_fix
+        sd.latest_fix = lambda db=None: self.fix
+        self.fix = at()
 
-    def mark(self, name, lat=None, lon=None):
-        """Mark `name` at the current fix, moving the van first if a latitude is given."""
-        if lat is not None:
-            make_db(self.van, [("2026-11-07T02:00:00Z", lat, LON if lon is None else lon,
-                                150.0, 0.0, 12, 1.0, 3)])
-        return sd.place_mark(name, db=self.van, places_db=self.places)
+    def tearDown(self):
+        sd.latest_fix = self._saved_fix
 
+    def rows(self, sql):
+        con = sqlite3.connect(self.db)
+        try:
+            return con.execute(sql).fetchall()
+        finally:
+            con.close()
 
-class TestHaversine(unittest.TestCase):
-    def test_one_degree_of_latitude_is_about_111_km(self):
-        self.assertAlmostEqual(sd.haversine_m(0, 0, 1, 0), 111195, delta=200)
+    def places(self):
+        return self.rows("SELECT name FROM place ORDER BY id")
 
-    def test_zero_distance(self):
-        self.assertEqual(0.0, sd.haversine_m(LAT, LON, LAT, LON))
+    def visits(self):
+        return self.rows("SELECT place_id FROM visit ORDER BY id")
 
-
-class TestNoFix(PlacesBase):
-    def test_no_gps_table_is_no_fix_not_an_error(self):
-        os.unlink(self.van)
-        status, body = sd.place_mark("Campground X", db=self.van, places_db=self.places)
-        self.assertEqual(409, status)
-        self.assertEqual("no fix", body["error"])
-
-    def test_empty_gps_table_is_no_fix(self):
-        make_db(self.van, [])
-        status, body = sd.place_mark("Campground X", db=self.van, places_db=self.places)
-        self.assertEqual(409, status)
-        self.assertEqual("no fix", body["error"])
-
-    def test_no_mark_is_written_when_there_is_no_fix(self):
-        make_db(self.van, [])
-        sd.place_mark("Campground X", db=self.van, places_db=self.places)
-        con = sd.places_con(self.places)
-        self.assertEqual(0, con.execute("SELECT COUNT(*) FROM place").fetchone()[0])
-        con.close()
+    def survey_place(self, run_id):
+        return self.rows("SELECT place_id FROM survey WHERE run_id = '%s'" % run_id)
 
 
-class TestNameValidation(PlacesBase):
-    def test_empty_name_is_rejected(self):
-        self.assertEqual(400, self.mark("")[0])
-        self.assertEqual(400, self.mark("   ")[0])
-        self.assertEqual(400, self.mark(None)[0])
-
-    def test_long_name_is_rejected(self):
-        self.assertEqual(400, self.mark("x" * 65)[0])
-
-    def test_name_is_stripped(self):
-        status, body = self.mark("  Campground X  ")
-        self.assertEqual(201, status)
-        self.assertEqual("Campground X", body["place"]["name"])
-
-
-class TestNewPlace(PlacesBase):
-    def test_first_mark_creates_the_place_and_a_visit(self):
-        status, body = self.mark("Campground X")
-        self.assertEqual(201, status)
+class TestNewName(PlaceRadiusCase):
+    def test_new_name_on_top_of_an_existing_place_is_refused(self):
+        status, body = sd.place_mark("Ada's Home", places_db=self.db)
+        self.assertEqual(status, 201)
         self.assertTrue(body["new_place"])
-        self.assertEqual("2026-11-07T01:07:44Z", body["visit_ts"])
-        con = sqlite3.connect(self.places)
-        self.assertEqual(1, con.execute("SELECT COUNT(*) FROM place").fetchone()[0])
-        self.assertEqual(1, con.execute("SELECT COUNT(*) FROM visit").fetchone()[0])
-        self.assertEqual("mark", con.execute("SELECT source FROM visit").fetchone()[0])
-        con.close()
 
-    def test_a_new_name_near_an_existing_place_warns(self):
-        self.mark("Campground X")
-        status, body = self.mark("Campground Y", lat=NEAR)
-        self.assertEqual(201, status)
-        self.assertIn("warning", body)
-        self.assertIn("Campground X", body["warning"])
+        status, body = sd.place_mark("Bob", places_db=self.db)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "too close")
+        self.assertEqual(body["existing"], "Ada's Home")
+        self.assertEqual(body["radius_m"], sd.PLACE_RADIUS_M)
+        self.assertIn("already a place", body["detail"])
+        # the refusal wrote nothing: one place, one visit, and no "Bob"
+        self.assertEqual(self.places(), [("Ada's Home",)])
+        self.assertEqual(len(self.visits()), 1)
 
-    def test_a_new_name_far_from_everything_does_not_warn(self):
-        self.mark("Campground X")
-        status, body = self.mark("Campground Y", lat=FAR)
-        self.assertEqual(201, status)
-        self.assertNotIn("warning", body)
+    def test_just_inside_the_radius_is_refused(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(sd.PLACE_RADIUS_M - 50)      # ~1157 m: inside 3/4 mile
+        status, body = sd.place_mark("Bob", places_db=self.db)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "too close")
+        self.assertEqual(self.places(), [("Ada's Home",)])
+
+    def test_just_outside_the_radius_is_a_new_place(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(sd.PLACE_RADIUS_M + 50)      # ~1257 m: outside 3/4 mile
+        status, body = sd.place_mark("Bob", places_db=self.db)
+        self.assertEqual(status, 201)
+        self.assertTrue(body["new_place"])
+        self.assertEqual(self.places(), [("Ada's Home",), ("Bob",)])
+
+    def test_the_detail_names_the_nearest_place(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(sd.PLACE_RADIUS_M + 100)      # outside the radius: a place of its own
+        self.assertEqual(sd.place_mark("Far", places_db=self.db)[0], 201)
+        self.fix = at(sd.PLACE_RADIUS_M + 120)      # 20 m from "Far", 1327 m from "Ada's Home"
+        status, body = sd.place_mark("Nearly", places_db=self.db)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["existing"], "Far")
+        self.assertLessEqual(body["distance_m"], 25)
 
 
-class TestSamePlace(PlacesBase):
-    def test_reusing_a_name_within_the_radius_is_a_visit(self):
-        self.mark("Campground X")
-        status, body = self.mark("Campground X", lat=NEAR)
-        self.assertEqual(200, status)
+class TestExistingName(PlaceRadiusCase):
+    def test_re_using_a_name_near_its_visit_is_a_visit(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(700)
+        status, body = sd.place_mark("Ada's Home", places_db=self.db)
+        self.assertEqual(status, 200)
         self.assertFalse(body["new_place"])
-        con = sqlite3.connect(self.places)
-        self.assertEqual(1, con.execute("SELECT COUNT(*) FROM place").fetchone()[0])
-        self.assertEqual(2, con.execute("SELECT COUNT(*) FROM visit").fetchone()[0])
-        con.close()
+        self.assertAlmostEqual(body["distance_m"], 700, delta=2)
+        self.assertEqual(len(self.visits()), 2)
 
-    def test_reusing_a_name_beyond_the_radius_is_an_error(self):
-        self.mark("Campground X")
-        status, body = self.mark("Campground X", lat=FAR)
-        self.assertEqual(409, status)
-        self.assertEqual("too far", body["error"])
-        self.assertGreater(body["distance_m"], sd.PLACE_RADIUS_M)
-        self.assertEqual("2026-11-07T01:07:44Z", body["nearest_ts"])
+    def test_re_using_a_name_far_away_is_refused(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(3000)
+        status, body = sd.place_mark("Ada's Home", places_db=self.db)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "too far")
+        self.assertEqual(len(self.visits()), 1)     # the refusal wrote nothing
 
-    def test_the_error_does_not_create_a_second_place(self):
-        self.mark("Campground X")
-        self.mark("Campground X", lat=FAR)
-        con = sqlite3.connect(self.places)
-        self.assertEqual(1, con.execute("SELECT COUNT(*) FROM place").fetchone()[0])
-        self.assertEqual(1, con.execute("SELECT COUNT(*) FROM visit").fetchone()[0])
-        con.close()
-
-    def test_the_name_match_is_case_insensitive(self):
-        self.mark("Campground X")
-        status, body = self.mark("campground x", lat=NEAR)
-        self.assertEqual(200, status)
-        self.assertEqual("Campground X", body["place"]["name"])
-
-    def test_distance_is_measured_to_the_nearest_visit_not_the_first(self):
-        # A campground is bigger than a point: mark the gate, then the far end, then come back to
-        # the far end. The third mark must be accepted even though it is far from the gate.
-        self.mark("Campground X")
-        self.mark("Campground X", lat=NEAR)
-        status, body = self.mark("Campground X", lat=NEAR)
-        self.assertEqual(200, status)
+    def test_a_name_is_matched_case_insensitively(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        status, body = sd.place_mark("ada's home", places_db=self.db)
+        self.assertEqual(status, 200)
+        self.assertEqual(body["place"]["name"], "Ada's Home")
 
 
-class TestReadPlaces(PlacesBase):
-    def test_counts_and_latest_fix(self):
-        self.mark("Campground X")
-        self.mark("Campground X", lat=NEAR)
-        self.mark("Other Spot", lat=FAR)
-        out = sd.read_places(places_db=self.places, db=self.van)
-        self.assertEqual(2, len(out["places"]))
-        by_name = {p["name"]: p for p in out["places"]}
-        self.assertEqual(2, by_name["Campground X"]["visits"])
-        self.assertEqual(1, by_name["Other Spot"]["visits"])
-        self.assertEqual(0, by_name["Campground X"]["surveys"])
-        self.assertEqual(sd.PLACE_RADIUS_M, out["radius_m"])
-        self.assertIsNotNone(out["latest_fix"])
+class TestNoFixAndNames(PlaceRadiusCase):
+    def test_no_fix_is_refused_without_writing(self):
+        self.fix = None
+        status, body = sd.place_mark("Anywhere", places_db=self.db)
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "no fix")
+        self.assertEqual(self.places(), [])
 
-    def test_empty_registry_is_not_an_error(self):
-        out = sd.read_places(places_db=self.places, db=self.van)
-        self.assertEqual([], out["places"])
+    def test_a_blank_or_overlong_name_is_a_400(self):
+        self.assertEqual(sd.place_mark("   ", places_db=self.db)[0], 400)
+        self.assertEqual(sd.place_mark("x" * 65, places_db=self.db)[0], 400)
+        self.assertEqual(self.places(), [])
+
+
+class TestSurveyRefusal(PlaceRadiusCase):
+    """start_survey files the place first, so it must return the refusal, not paper over it."""
+
+    def _no_launch(self):
+        def boom(*a, **k):
+            raise AssertionError("the survey engine was launched despite a refusal")
+        return boom
+
+    def test_a_near_duplicate_name_starts_nothing(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        saved, sd._delilah = sd._delilah, self._no_launch()
+        try:
+            status, body = sd.start_survey("Bob", places_db=self.db)
+        finally:
+            sd._delilah = saved
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "too close")
+        self.assertEqual(self.places(), [("Ada's Home",)])
+
+    def test_a_far_away_name_starts_nothing(self):
+        self.assertEqual(sd.place_mark("Ada's Home", places_db=self.db)[0], 201)
+        self.fix = at(5000)
+        saved, sd._delilah = sd._delilah, self._no_launch()
+        try:
+            status, body = sd.start_survey("Ada's Home", places_db=self.db)
+        finally:
+            sd._delilah = saved
+        self.assertEqual(status, 409)
+        self.assertEqual(body["error"], "too far")
+
+    def test_a_survey_with_no_fix_still_files_the_place(self):
+        """A survey does not need a fix: the place exists from the moment it is asked for."""
+        self.fix = None
+        import types
+
+        def launched(cmd, timeout=20):
+            self.assertIn("start-stop-daemon", cmd)
+            return types.SimpleNamespace(returncode=0, stdout="", stderr="")
+
+        saved, sd._delilah = sd._delilah, launched
+        try:
+            status, body = sd.start_survey("Somewhere New", places_db=self.db)
+        finally:
+            sd._delilah = saved
+        self.assertEqual(status, 202)
+        self.assertTrue(body["run_id"])
+        self.assertEqual(self.places(), [("Somewhere New",)])
+        self.assertEqual(self.visits(), [])      # no fix, so no visit - only the place
 
 
 if __name__ == "__main__":

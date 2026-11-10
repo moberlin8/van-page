@@ -195,8 +195,9 @@ def place_mark(name, now=None, db=None, places_db=None, source="mark"):
       * no fix, no mark - a null position is worse than a gap;
       * an existing name within 3/4 mile of any of its visits is the same place, and this is a visit;
       * an existing name further away is an ERROR, and the error says how far and when;
-      * a new name that lands within 3/4 mile of a different place is created, but with a warning,
-        because that is how near-duplicates get made.
+      * a new name that lands within 3/4 mile of a different place is an ERROR too (Matt,
+        09-Nov-2026): it used to be created with a warning, and a warning stops nobody - the first
+        near-duplicate on record, "Bob", landed 2 m from "Ada's Home".
     """
     name = (name or "").strip()
     if not name:
@@ -248,18 +249,36 @@ def place_mark(name, now=None, db=None, places_db=None, source="mark"):
                          "visit_ts": fix["ts"], "distance_m": round(nearest[0]) if nearest else None,
                          "new_place": False}
 
-        # A new name. Warn if it is standing on top of an existing place.
-        warning = None
+        # A new name standing on top of an existing place is REFUSED (Matt, 09-Nov-2026). It used
+        # to be created with a warning; the rule is now the far-away rule read the other way round,
+        # because "same place, different name" makes the same mess as "same name, different place".
+        # Nearest wins, so the detail names the place the user probably meant.
+        # Ada 10-Nov-2026 deployed: this half was committed on ada/place-radius-both-ways but absent
+        # from the live tree, which the services execute - see board/geddy's rev- on the refusal.
+        nearest = None
         for pid, pname, ts, lat, lon in con.execute(
                 "SELECT p.id, p.name, v.ts, v.lat, v.lon FROM place p"
                 " JOIN visit v ON v.place_id = p.id"):
             if lat is None or lon is None:
                 continue
             d = haversine_m(fix["lat"], fix["lon"], lat, lon)
-            if d <= PLACE_RADIUS_M:
-                warning = ("\"%s\" is already a place %.1f mi from here - did you mean that one?"
-                           % (pname, d / 1609.344))
-                break
+            if nearest is None or d < nearest[0]:
+                nearest = (d, pname, pid, ts)
+        if nearest and nearest[0] <= PLACE_RADIUS_M:
+            # Metres, not "0.0 mi": the near-duplicate that started this was two metres away.
+            away = (("%.0f m" % nearest[0]) if nearest[0] < 161.0
+                    else ("%.1f mi" % (nearest[0] / 1609.344)))
+            return 409, {
+                "error": "too close",
+                "name": name,
+                "existing": nearest[1],
+                "existing_id": nearest[2],
+                "distance_m": round(nearest[0]),
+                "radius_m": PLACE_RADIUS_M,
+                "nearest_ts": nearest[3],
+                "detail": "\"%s\" is already a place %s from here. Use that name, or mark "
+                          "this one where it belongs." % (nearest[1], away),
+            }
         cur = con.execute("INSERT INTO place (name, first_ts, last_ts) VALUES (?,?,?)",
                           (name, fix["ts"], fix["ts"]))
         place_id = cur.lastrowid
@@ -268,11 +287,8 @@ def place_mark(name, now=None, db=None, places_db=None, source="mark"):
             " VALUES (?,?,?,?,?,?,?,?)",
             (fix["ts"], place_id, fix["lat"], fix["lon"], fix["alt"], fix["sats"], fix["fix"], source))
         con.commit()
-        body = {"ok": True, "place": {"id": place_id, "name": name},
-                "visit_ts": fix["ts"], "new_place": True}
-        if warning:
-            body["warning"] = warning
-        return 201, body
+        return 201, {"ok": True, "place": {"id": place_id, "name": name},
+                     "visit_ts": fix["ts"], "new_place": True}
     finally:
         con.close()
 
@@ -322,9 +338,11 @@ def start_survey(name, places_db=None, db=None):
         return 400, {"error": "name too long (64 characters max)"}
 
     # The place exists from the moment the survey is asked for. A survey does not need a fix, so a
-    # missing one is not a reason to refuse - but a name that belongs to a place far away is.
+    # missing one is not a reason to refuse - but a name that belongs to a place far away, or a new
+    # name standing on top of one, is. Both are place_mark's refusals and both come back to the page
+    # untouched: ensure_place() below must not quietly create the place a refusal just rejected.
     status, body = place_mark(name, db=db, places_db=places_db, source="survey")
-    if status == 409 and body.get("error") == "too far":
+    if status == 409 and body.get("error") in ("too far", "too close"):
         return status, body
     if status not in (200, 201):
         ensure_place(name, places_db)
