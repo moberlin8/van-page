@@ -23,6 +23,8 @@
     centred, and the type sits at 0.78rem so the longest status string holds one line.
     Ada 10-Nov-2026 Usage tile copy (Matt, his exact string): the amber warning now reads
     "EvilDish exceeds 50% allocation" instead of "EvilDish past half its high-speed".
+    Ada 10-Nov-2026 Usage bars (Matt): SIM2's bar no longer draws its 80% threshold tick -- a lone
+    white line in a nearly empty track read as a stray artifact. The dish's bar keeps its tick.
     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
@@ -443,7 +445,10 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 .csquare.usage .btitle{font-size:1.05rem}
 /* Ada 06-Nov-2026 the usage tile's level bars: one thin bar per service, a fill that carries
    the band colour, tick marks at the thresholds that matter (warn, allowance/bank ceiling), and
-   a neutral grey when the tile has no attributable reading to draw. */
+   a neutral grey when the tile has no attributable reading to draw.
+   Ada 10-Nov-2026 only the dish's bar draws a tick now: SIM2's 80% mark was removed on Matt's
+   call ("stray vertical white line ... on the SIM2 usage bar. Please remove that") because on a
+   nearly empty track it read as an artifact. The rule below stays -- the dish still uses it. */
 .csquare.usage .lvl{display:inline-block;width:7.2rem;height:.5rem;border-radius:.25rem;
   background:rgba(255,255,255,.14);position:relative;overflow:hidden;vertical-align:middle}
 .csquare.usage .lvl .fill{position:absolute;left:0;top:0;bottom:0;border-radius:.25rem;
@@ -2512,8 +2517,12 @@ function renderUsage(u) {
   const s2 = (u && u.sim && u.sim["2"]) || null;
   const sim2GB = (s2 && s2.total_bytes != null) ? s2.total_bytes / BYTES_GB : null;
   const sim2Band = usageBand(sim2GB, SIM2_WARN_GB, SIM2_BANK_GB);
-  html("usg-sim-level", usageLevel(sim2GB == null ? 0 : (sim2GB / SIM2_PLAN_GB) * 100,
-    sim2Band, [(SIM2_WARN_GB / SIM2_PLAN_GB) * 100]));
+  // Ada 10-Nov-2026 SIM2's bar draws no threshold tick (Matt: "a stray vertical white line ... on
+  // the SIM2 usage bar. Please remove that"). Its only mark was the 80% warn threshold, and on a
+  // track that is nearly always empty it read as an artifact -- a lone white line floating in grey
+  // -- not as a scale. The dish's bar keeps its own: it sits where the amber fill's edge lands, so
+  // it is covered the moment usage reaches it, and it reads as part of the fill rather than a stray.
+  html("usg-sim-level", usageLevel(sim2GB == null ? 0 : (sim2GB / SIM2_PLAN_GB) * 100, sim2Band));
   txt("usg-sim-used", sim2GB == null ? "\u2014"
     : sim2GB.toFixed(3) + " of " + SIM2_PLAN_GB + " GB");
   const c = simCycle(new Date());
