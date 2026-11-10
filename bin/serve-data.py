@@ -104,12 +104,9 @@ DISMISS_WINDOW_S = 26 * 3600
 # in var/, next to dismissed.json. The GPS track stays in van.db and is read here read-only.
 PLACES_DB = "/home/ada/van/var/places.db"
 
-# Matt's threshold, 06-Nov-2026: 3/4 mile, and it cuts both ways. A name that already exists whose
-# fix is further than this from every visit to that place is an ERROR, not a new place - "same name,
-# different town" is the mistake this exists to catch. A NEW name whose fix lands within this of an
-# existing place is refused as well (Matt, 09-Nov-2026): that is the same town under a different
-# name, which is how near-duplicates get made. One threshold, one meaning: what you type is either
-# the place it already is, or a place somewhere else.
+# Matt's threshold, 06-Nov-2026: 3/4 mile. A name that already exists but whose fix is further than
+# this from every visit to that place is an ERROR, not a new place - "same name, different town" is
+# the mistake this exists to catch.
 PLACE_RADIUS_M = 1207.0
 
 PLACES_SCHEMA = """
@@ -256,6 +253,8 @@ def place_mark(name, now=None, db=None, places_db=None, source="mark"):
         # to be created with a warning; the rule is now the far-away rule read the other way round,
         # because "same place, different name" makes the same mess as "same name, different place".
         # Nearest wins, so the detail names the place the user probably meant.
+        # Ada 10-Nov-2026 deployed: this half was committed on ada/place-radius-both-ways but absent
+        # from the live tree, which the services execute - see board/geddy's rev- on the refusal.
         nearest = None
         for pid, pname, ts, lat, lon in con.execute(
                 "SELECT p.id, p.name, v.ts, v.lat, v.lon FROM place p"
@@ -417,26 +416,45 @@ def survey_state(max_age=5.0, places_db=None):
 # read_history() because the gps table's ts is the GPS's own ISO-8601 UTC string, not the epoch
 # float every other table uses - the whole point of it being the fix's clock rather than the
 # router's. Comparing it to a float would silently return nothing.
-def read_track(hours=24, db=None):
-    """Columnar track for the last `hours`, oldest first."""
+def read_track(hours=None, db=None):
+    """Columnar track, oldest first. `hours` falsy (None or 0) means everything we hold.
+
+    Ada 09-Nov-2026 Matt: "the whole trip's track rather than the last day". A track is a SHAPE --
+    "where have we been" is cumulative -- so the position panel asks for the whole record while the
+    charts beside it keep their own window. Two things follow from letting the query be unbounded:
+    the response must still be bounded (MAX_POINTS, the same cap the charts use), and the LAST fix
+    must survive the thinning, because the panel draws it as the amber "you are here" pin and a
+    strided last point would put that pin up to `stride` intervals in the past.
+    """
     db = DB if db is None else db
     if not os.path.exists(db):
         return {"error": "no history database yet"}
-    since = time.time() - hours * 3600
-    since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+    where, args = "", ()
+    if hours:
+        since = time.time() - hours * 3600
+        since_iso = datetime.datetime.utcfromtimestamp(since).strftime("%Y-%m-%dT%H:%M:%SZ")
+        where, args = " WHERE ts >= ?", (since_iso,)
     try:
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
         try:
             rows = con.execute(
-                "SELECT ts, lat, lon, alt, speed, sats FROM gps WHERE ts >= ? ORDER BY ts ASC",
-                (since_iso,)).fetchall()
+                "SELECT ts, lat, lon, alt, speed, sats FROM gps" + where + " ORDER BY ts ASC",
+                args).fetchall()
         finally:
             con.close()
     except sqlite3.Error as e:
         return {"error": "cannot read the track: %s" % e}
 
-    out = {"hours": hours, "count": len(rows), "ts": [], "lat": [], "lon": [],
-           "alt": [], "speed": [], "sats": []}
+    total = len(rows)
+    stride = max(1, int(total / MAX_POINTS) + 1)
+    if stride > 1:
+        newest = rows[-1]
+        rows = rows[::stride]
+        if rows[-1] is not newest:
+            rows.append(newest)      # the pin marks the newest fix, not the nearest strided one
+
+    out = {"hours": hours, "count": 0, "total": total, "stride": stride,
+           "ts": [], "lat": [], "lon": [], "alt": [], "speed": [], "sats": []}
     for ts, lat, lon, alt, speed, sats in rows:
         try:
             epoch = datetime.datetime.strptime(ts, "%Y-%m-%dT%H:%M:%SZ").replace(
@@ -771,16 +789,50 @@ MANUAL_WINDOW = ("2026-10-21", "2026-10-25")   # UTC, [start, end)
 MANUAL_TOTAL = 15.8e9
 MANUAL_SPLIT = (3.541 / 5.494, 1.953 / 5.494)   # down, up
 
+# Ada 10-Nov-2026 the second manual figure: EvilDish's own cycle up to the tick this box first
+# identified it. Matt, 10-Nov-2026: "I show 51Gb for EvilDish in the current billing cycle" - the
+# Starlink app is the authority for a billed figure, and it is the only source for the part of the
+# cycle this box never read: until 11:46 the van's kit was off the WAN jack and another terminal
+# (BigBoyDish) answered 192.168.100.1, and before 06-Nov no row carried an identity at all.
+# The arithmetic, so nobody has to re-derive it:
+#     51.00 GB  (Starlink, 10-Nov-2026 ~12:45 EST)
+#   -  0.251 GB  what this file counted for the cycle by itself (EvilDish's own increase from 11:46)
+#   = 50.75 GB  the part it cannot measure, which is what the constant below holds.
+# The window's END is that identification tick: rows after it are counted, so nothing is plugged
+# twice. Legacy rows inside the window stay UNCOUNTED - a firmware string is not an identity (the
+# Mini's `cr88921.3` rows of 30-Oct..05-Nov are almost certainly EvilDish's, but another kit can
+# report the same string) - so if one is ever added to VAN_DISH_IDS, this total must shrink by
+# exactly those bytes. The split is EvilDish's own measured down/up shape (80/20, from its rows in
+# the store); it is cosmetic here, because the tile shows the service total.
+EVILDISH_PLUG_WINDOW = ("2026-10-25", "2026-11-10T11:46:08")   # UTC, [start, end)
+EVILDISH_PLUG_TOTAL = 50.75e9
+EVILDISH_PLUG_SPLIT = (0.80, 0.20)   # down, up
+
+# Ada 10-Nov-2026 both figures in one place, so what is plugged and why is one read. Each applies
+# only to a period that contains its own window, which is what keeps a closed cycle's missing bytes
+# out of the current one. Plan §16/T11 would replace this with coverage reporting; until then a
+# figure here is scoped to its window and named in /usage's `manual_lump` so the page never has to
+# guess what the total is made of.
+LUMPS = (
+    {"window": MANUAL_WINDOW, "total": MANUAL_TOTAL, "split": MANUAL_SPLIT,
+     "label": "Oct 21-24 roaming (no rows: the store's first dish sample is 20-Oct)"},
+    {"window": EVILDISH_PLUG_WINDOW, "total": EVILDISH_PLUG_TOTAL, "split": EVILDISH_PLUG_SPLIT,
+     "label": "EvilDish's own cycle up to the identification tick (Starlink's figure)"},
+)
+
 # Ada 06-Nov-2026 the van's own dish, and the only terminal /van may count.
 # Matt: "ignore data from BigBoyDish, and do not show BigBoyDish data on the Van Page." Two
 # Starlink terminals answer the same address, and this box has spent the cycle reading Geddy's
 # kit over the home path while the van's dish sat powered off on the WAN jack. Their counters
 # have unrelated baselines, so one total across both is mostly someone else's usage.
 # Entries are matched against terminal_group(): the stored dish_id, or the firmware string for
-# rows written before the poller stored one. EMPTY MEANS NOTHING IS ATTRIBUTED, which is the
-# honest state until EvilDish is up and its identity is confirmed - a number nobody can defend
-# is worse than no number. To attribute, list the kit here (or pass van_ids= in a test).
-VAN_DISH_IDS = ()
+# rows written before the poller stored one. EMPTY MEANT NOTHING WAS ATTRIBUTED - the honest state
+# until EvilDish is up and its identity is confirmed. Ada 10-Nov-2026 it is confirmed and listed
+# below, so the dish half of the usage tile counts the van's kit only. Legacy rows with no
+# dish_id group by firmware string, which cannot match an id, so they stay uncounted rather than
+# being attributed to a kit nobody recorded - expect the cycle figure to start small (it counts
+# EvilDish's own samples from 11:46 on 10-Nov) instead of borrowing the home kit's total.
+VAN_DISH_IDS = ("ut41c81581-84505c0f-dac5a295",)   # EvilDish, read off the WAN jack 10-Nov-2026
 
 
 # Ada 06-Nov-2026 which terminal a dish row came from. Two Starlink terminals answer the same
@@ -817,19 +869,47 @@ def sim_usage(con):
     return out
 
 
+def _window_bounds(window):
+    """(start, end) epoch seconds of a LUMPS window, each bound a date or a date-time."""
+    import datetime as _dt
+    out = []
+    for s in window:
+        fmt = "%Y-%m-%dT%H:%M:%S" if "T" in s else "%Y-%m-%d"
+        out.append(_dt.datetime.strptime(s, fmt).replace(
+            tzinfo=_dt.timezone.utc).timestamp())
+    return out[0], out[1]
+
+
+def lumps_for(start, end):
+    """(down, up, detail) of every manual figure this period contains, else (0, 0, []).
+
+    `start`/`end` are period bounds as epoch seconds (UTC), inclusive end. A window applies only
+    when the period overlaps it, which is what scoped the Oct 21-24 figure to its own cycle.
+    """
+    down = up = 0.0
+    detail = []
+    for lump in LUMPS:
+        w0, w1 = _window_bounds(lump["window"])
+        if end < w0 or start >= w1:
+            continue
+        d = lump["total"] * lump["split"][0]
+        u = lump["total"] * lump["split"][1]
+        down += d
+        up += u
+        detail.append({"window": "%s..%s" % (lump["window"][0], lump["window"][1]),
+                       "label": lump["label"], "total": lump["total"], "down": d, "up": u})
+    return down, up, detail
+
+
 def manual_lump_for(start, end):
     """(down, up) of the un-covered Oct 21-24 roaming, or (0.0, 0.0) if absent.
 
     `start`/`end` are period bounds as epoch seconds (UTC), inclusive end.
+    Ada 10-Nov-2026 now the sum over LUMPS (that figure plus EvilDish's own cycle plug); the
+    name is kept because it is the documented entry point for a period's manual figures.
     """
-    import datetime as _dt
-    w0 = _dt.datetime.strptime(MANUAL_WINDOW[0], "%Y-%m-%d").replace(
-        tzinfo=_dt.timezone.utc).timestamp()
-    w1 = _dt.datetime.strptime(MANUAL_WINDOW[1], "%Y-%m-%d").replace(
-        tzinfo=_dt.timezone.utc).timestamp()
-    if end < w0 or start >= w1:
-        return (0.0, 0.0)
-    return (MANUAL_TOTAL * MANUAL_SPLIT[0], MANUAL_TOTAL * MANUAL_SPLIT[1])
+    down, up, _ = lumps_for(start, end)
+    return (down, up)
 
 
 def billing_period(now=None):
@@ -949,7 +1029,9 @@ def read_usage(db=None, van_ids=None):
 
     now = time.time()
     # Ada 06-Nov-2026 the lump, only for a period that contains Oct 21-24 (see MANUAL_WINDOW).
-    manual_down, manual_up = manual_lump_for(start, end)
+    # Ada 10-Nov-2026 the same call now also carries EvilDish's own cycle up to its identification
+    # tick (see EVILDISH_PLUG_WINDOW), so the dish total matches Starlink's own figure for the kit.
+    manual_down, manual_up, manual_detail = lumps_for(start, end)
     if down is None:
         manual_down = manual_up = 0.0        # an unknown total has nothing to add it to
     else:
@@ -978,13 +1060,17 @@ def read_usage(db=None, van_ids=None):
         # Ada 06-Nov-2026 per-terminal detail: the total is the sum of these, so the page can
         # name which terminal it is reading instead of silently using both.
         "terminals": terminals,
-        # Ada 06-Nov-2026 say whether the manual figure was counted, and how much of it,
+        # Ada 06-Nov-2026 say whether the manual figures were counted, and how much of each,
         # so nobody has to read this file to know what the total is made of.
+        # Ada 10-Nov-2026 there can now be two (the Oct 21-24 roaming figure and EvilDish's own
+        # cycle plug), so the detail is a list and `windows` names them all.
         "manual_lump": {
             "applied": bool(manual_down or manual_up),
             "down": manual_down,
             "up": manual_up,
-            "window": "%s..%s" % MANUAL_WINDOW,
+            "window": "; ".join(d["window"] for d in manual_detail),
+            "windows": [d["window"] for d in manual_detail],
+            "lumps": manual_detail,
         },
     }, None
 
@@ -1200,12 +1286,16 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
         if u.path.rstrip("/") in ("/track", "/track.json"):
             # Ada 06-Nov-2026 the GPS track for the history page (plan §15k).
+            # Ada 09-Nov-2026 `hours=0` means the whole record (Matt: "the whole trip's track
+            # rather than the last day"). The DEFAULT stays bounded on purpose: an endpoint that
+            # hands back everything when asked nothing is a trap on a record that only grows, so
+            # the page asks for the whole trip explicitly and a stray caller does not.
             q = urllib.parse.parse_qs(u.query)
             try:
                 hours = float(q.get("hours", ["24"])[0])
             except ValueError:
                 hours = 24.0
-            hours = max(0.25, min(24 * 90, hours))
+            hours = None if hours <= 0 else max(0.25, min(24 * 90, hours))
             self.no_store = True
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps(read_track(hours)).encode("utf-8"))
