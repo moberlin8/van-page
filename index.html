@@ -21,6 +21,8 @@
     Ada 10-Nov-2026 Usage tile's bottom line (Matt): "center the warning line ... If it takes the
     entire row, then it shouldn't wrap" -> the row is class "status", its value spans the row and is
     centred, and the type sits at 0.78rem so the longest status string holds one line.
+    Ada 10-Nov-2026 Usage tile copy (Matt, his exact string): the amber warning now reads
+    "EvilDish exceeds 50% allocation" instead of "EvilDish past half its high-speed".
     Ada 27-Oct-2026 Restored .led.warn CSS rule (was dropped in PR #2): yellow amber light for the alerts ⚠️.
      Ada 27-Oct-2026 Alerts row shows green light when all well, yellow ⚠️ otherwise.
      Ada 27-Oct-2026 Alerts indicator wrapped in .v same as Connected row for alignment.
@@ -458,12 +460,13 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 /* Ada 10-Nov-2026 the usage tile's bottom line is a sentence, not a label/value pair (Matt:
    "center the warning line at the bottom of the usage ... If it takes the entire row, then it
    shouldn't wrap"). So the value spans the row and is centred, and the TYPE STEP -- not wrapping --
-   is what fits the longest one. Measured on the live tile: "EvilDish past half its high-speed"
-   is 269px at the sibling rows' 0.85rem against 255px of usable row width (the 271px tile column
-   less the row's 2 x 0.5rem padding), which is why it wrapped to two lines (41px tall against a
-   20.4px line box). 0.78rem measures 247px, and every other status string is shorter, so one line
-   fits with 8px to spare. text-overflow is the fallback for a future longer string: a truncated
-   line beats a wrapped one, which silently grows the square. */
+   is what fits the longest one. Measured on the live tile: the longest status string then was
+   "EvilDish past half its high-speed" at 269px on the sibling rows' 0.85rem against 255px of usable
+   row width (the 271px tile column less the row's 2 x 0.5rem padding), which is why it wrapped to
+   two lines (41px tall against a 20.4px line box). 0.78rem measures 247px and every other status
+   string is shorter -- including the warn label as Matt reworded it on 10-Nov ("EvilDish exceeds
+   50% allocation") -- so one line fits with 8px to spare. text-overflow is the fallback for a
+   future longer string: a truncated line beats a wrapped one, which silently grows the square. */
 .csquare.usage .r.status{justify-content:center}
 .csquare.usage .r.status .v{width:100%;text-align:center;white-space:nowrap;font-size:0.78rem;
   overflow:hidden;text-overflow:ellipsis}
@@ -2533,7 +2536,7 @@ function renderUsage(u) {
   let band = "ok", label = "";
   if (dishBand === "bad") { band = "bad"; label = "EvilDish on unlimited low-speed"; }
   else if (sim2Band === "bad") { band = "bad"; label = "SIM2 at the bank ceiling"; }
-  else if (dishBand === "warn") { band = "warn"; label = "EvilDish past half its high-speed"; }
+  else if (dishBand === "warn") { band = "warn"; label = "EvilDish exceeds 50% allocation"; }
   else if (sim2Band === "warn") { band = "warn"; label = "SIM2 past 80% of this cycle"; }
   html("usg-status", label ? '<span class="' + band + '">' + esc(label) + "</span>" : "");
 }
