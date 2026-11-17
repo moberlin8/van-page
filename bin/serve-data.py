@@ -771,13 +771,129 @@ def read_history(hours, fields, table="dish", db=None):
     return out, None
 
 
-# Ada 24-Oct-2026 the billing period. Starlink bills on a cycle anchored to the
-# day the kit was first activated, NOT the calendar month: Matt's account runs
-# the 25th of one month to the 24th of the next (the Starlink help page shows
-# "September 25 - October 24" as the example, and his account shows the same).
-# The dish does not report this -- it is not in the gRPC status fields -- so it
-# is a constant here. Change it if the account's billing day changes.
-BILLING_DAY = 25
+# Ada 17-Nov-2026 the usage plan (Matt). The caps, the warning levels, the $/GB and EACH SERVICE'S
+# OWN cycle start day used to be constants in two files -- this one and index.html -- plus a third
+# hand-written copy inside the tile's tooltip, which had already drifted from both. They now live in
+# one JSON file that the form at /van/caps.html edits; this server reads it per request and the page
+# reads it from GET /caps, so one edit changes the tile and nothing is kept in sync by hand. The dish
+# and the SIM bill on different days (25th and 28th here), which is why each service carries its own
+# billing_day instead of one shared day.
+#
+# The file lives in var/ with dismissed.json and places.db, NOT under /srv/van/data:
+# van-data.service runs with ReadOnlyPaths=/srv/van/data on purpose (the poller owns that
+# directory), so this server cannot write there -- and a form that cannot save is worse than none.
+CAPS_FILE = "/home/ada/van/var/caps.json"
+
+CAPS_DEFAULTS = {
+    "version": 1,
+    "dish": {"plan_gb": 100.0, "warn_gb": 50.0, "usd_gb": 0.55, "billing_day": 25},
+    "sim2": {"plan_gb": 20.0, "warn_gb": 16.0, "bank_gb": 60.0, "usd_gb": 1.95, "billing_day": 28},
+}
+
+# (min, max) per field. billing_day stops at 28 because billing_period() builds the anchor with
+# datetime.replace(day=N), which raises for 29-31 in February -- a day the plan cannot honour in
+# every month is not offered. The GB bounds are generous on purpose: they catch a typo or a
+# negative, they do not police the plan Matt actually buys.
+CAPS_RANGES = {
+    "dish": {"plan_gb": (0.01, 1000000.0), "warn_gb": (0.0, 1000000.0),
+             "usd_gb": (0.0, 1000.0), "billing_day": (1, 28)},
+    "sim2": {"plan_gb": (0.01, 1000000.0), "warn_gb": (0.0, 1000000.0),
+             "bank_gb": (0.01, 1000000.0), "usd_gb": (0.0, 1000.0), "billing_day": (1, 28)},
+}
+
+# What the page and the server fall back to when the file is absent or unreadable: the numbers the
+# tile has always drawn. A missing config file must never blank the tile.
+DEFAULT_BILLING_DAY = CAPS_DEFAULTS["dish"]["billing_day"]
+
+
+def _number(raw):
+    """The float a submitted value stands for, or None if it is not a number.
+
+    A form posts strings ("100"), so a non-numeric value is coerced; a bool is refused outright
+    (True is an int in Python, and would otherwise silently become 1).
+    """
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, (int, float)):
+        return float(raw)
+    try:
+        return float(str(raw).strip())
+    except (TypeError, ValueError):
+        return None
+
+
+def validate_caps(payload):
+    """(clean, errors) for a submitted plan.
+
+    `clean` is a full config: the defaults with every accepted field from `payload` laid over them,
+    so a form that omits a field cannot erase it. `errors` names every field that was rejected, and
+    the reply carries them so the form can say WHAT was wrong -- silently keeping the old value
+    reads as "save did nothing".
+    """
+    clean = json.loads(json.dumps(CAPS_DEFAULTS))
+    errors = []
+    if not isinstance(payload, dict):
+        return clean, ["body must be a JSON object"]
+    for svc, fields in CAPS_RANGES.items():
+        blk = payload.get(svc)
+        if blk is None:
+            continue
+        if not isinstance(blk, dict):
+            errors.append("%s must be an object" % svc)
+            continue
+        for key, (lo, hi) in fields.items():
+            if key not in blk:
+                continue
+            v = _number(blk[key])
+            if v is None or v != v or v in (float("inf"), float("-inf")):
+                errors.append("%s.%s is not a number" % (svc, key))
+                continue
+            if not (lo <= v <= hi):
+                errors.append("%s.%s must be between %g and %g" % (svc, key, lo, hi))
+                continue
+            clean[svc][key] = int(round(v)) if key == "billing_day" else float(v)
+    ver = payload.get("version")
+    if isinstance(ver, (int, float)) and not isinstance(ver, bool):
+        clean["version"] = int(ver)
+    return clean, errors
+
+
+def read_caps(path=None):
+    """The usage plan, with the defaults filled in and a bad file ignored.
+
+    Read per request rather than cached, so a save is live on the page's next tick without a
+    restart. Absent, unreadable or non-JSON returns the defaults: the tile keeps drawing the
+    numbers it always has instead of blanking.
+    """
+    path = CAPS_FILE if path is None else path
+    try:
+        with open(path) as fh:
+            saved = json.load(fh)
+    except (OSError, ValueError):
+        return json.loads(json.dumps(CAPS_DEFAULTS))
+    clean, _ = validate_caps(saved if isinstance(saved, dict) else {})
+    return clean
+
+
+def write_caps(clean, path=None):
+    """Write the plan atomically, so a save is never half-visible to a reader.
+
+    This server and the page both read the file; a truncate-and-write would let a request in the gap
+    see an empty file and fall back to the defaults. os.replace is atomic within a filesystem.
+    """
+    path = CAPS_FILE if path is None else path
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(path), prefix=".caps-", suffix=".json")
+    try:
+        with os.fdopen(fd, "w") as fh:
+            json.dump(clean, fh, indent=2, sort_keys=True)
+            fh.write("\n")
+        os.replace(tmp, path)
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+        raise
 
 # Ada 06-Nov-2026 the one manual figure in this file, scoped to the period it belongs to.
 # The database's first dish sample is 20-Oct-2026, so the Oct 21-24 roaming traffic has no
@@ -912,20 +1028,28 @@ def manual_lump_for(start, end):
     return (down, up)
 
 
-def billing_period(now=None):
-    """Return (start_ts, end_ts) of the current Starlink billing period, UTC."""
+def billing_period(now=None, day=None):
+    """Return (start_ts, end_ts) of the current Starlink billing period, UTC.
+
+    Ada 17-Nov-2026 the anchor is the configured dish billing day (the plan file), not a constant:
+    `day` defaults to None and is resolved here, so a caller that has already read the plan can pass
+    it and a test can pin it.
+    """
     import calendar
     import datetime as _dt
+    if day is None:
+        day = int(read_caps()["dish"]["billing_day"])
+    day = max(1, min(28, int(day)))
     now = _dt.datetime.fromtimestamp(now if now is not None else time.time(),
                                      tz=_dt.timezone.utc)
-    start = now.replace(day=BILLING_DAY, hour=0, minute=0, second=0, microsecond=0)
+    start = now.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
     if start > now:
         # we are before this month's billing day, so the period began last month
         first = (start.replace(day=1) - _dt.timedelta(days=1)).replace(
-            day=BILLING_DAY, hour=0, minute=0, second=0, microsecond=0)
+            day=day, hour=0, minute=0, second=0, microsecond=0)
         start = first
     nxt = start + _dt.timedelta(days=32)
-    nxt = nxt.replace(day=BILLING_DAY, hour=0, minute=0, second=0, microsecond=0)
+    nxt = nxt.replace(day=day, hour=0, minute=0, second=0, microsecond=0)
     end = nxt - _dt.timedelta(seconds=1)
     return start.timestamp(), end.timestamp()
 
@@ -948,7 +1072,10 @@ def read_usage(db=None, van_ids=None):
         van_ids = VAN_DISH_IDS
     if not os.path.exists(db):
         return None, "no database yet"
-    start, end = billing_period()
+    # Ada 17-Nov-2026 the dish's cycle start comes from the plan file, so changing the billing day
+    # at /van/caps.html moves the period on the next request, with no restart.
+    dish_day = int(read_caps()["dish"]["billing_day"])
+    start, end = billing_period(day=dish_day)
     try:
         con = sqlite3.connect("file:%s?mode=ro" % db, uri=True, timeout=10)
     except sqlite3.Error as e:
@@ -1038,7 +1165,7 @@ def read_usage(db=None, van_ids=None):
         down += manual_down
         up += manual_up
     return {
-        "billing_day": BILLING_DAY,
+        "billing_day": dish_day,
         "period_start": start,
         "period_end": end,
         "days_total": int(round((end - start) / 86400.0)),
@@ -1223,6 +1350,33 @@ class Handler(http.server.SimpleHTTPRequestHandler):
                           json.dumps(body).encode("utf-8"))
             return
 
+        # Ada 17-Nov-2026 the usage plan's write path (Matt's form). Validation rejects a bad
+        # number loudly: a save that silently kept the old value would read as a broken form.
+        if path == "/caps":
+            raw = self.rfile.read(int(self.headers.get("Content-Length") or 0))
+            try:
+                payload = json.loads(raw or b"{}")
+            except ValueError:
+                payload = None
+            clean, errors = validate_caps(payload)
+            if errors:
+                self.no_store = True
+                self._respond(400, "application/json; charset=utf-8",
+                              json.dumps({"error": "; ".join(errors),
+                                          "errors": errors}).encode("utf-8"))
+                return
+            try:
+                write_caps(clean)
+            except OSError as e:
+                self.no_store = True
+                self._respond(500, "application/json; charset=utf-8",
+                              json.dumps({"error": "cannot write the plan: %s" % e}).encode("utf-8"))
+                return
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps({"ok": True, "caps": clean}).encode("utf-8"))
+            return
+
         if path == "/history":
             self._respond(405, "application/json; charset=utf-8",
                           json.dumps({"error": "method not allowed"}).encode("utf-8"))
@@ -1320,6 +1474,18 @@ class Handler(http.server.SimpleHTTPRequestHandler):
             # Ada 06-Nov-2026 which build of the page is this (Matt's footer)
             self._respond(200, "application/json; charset=utf-8",
                           json.dumps(page_version()).encode("utf-8"))
+            return
+
+        if u.path.rstrip("/") in ("/caps", "/caps.json"):
+            # Ada 17-Nov-2026 the usage plan the form at /van/caps.html edits (Matt). `defaults`
+            # and `ranges` ride along so the form can label each field and offer a reset without
+            # hard-coding the numbers a second time.
+            self.no_store = True
+            self._respond(200, "application/json; charset=utf-8",
+                          json.dumps({"caps": read_caps(),
+                                      "defaults": CAPS_DEFAULTS,
+                                      "ranges": CAPS_RANGES,
+                                      "path": CAPS_FILE}).encode("utf-8"))
             return
 
         if u.path.rstrip("/") in ("/usage", "/usage.json"):
