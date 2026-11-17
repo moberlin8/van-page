@@ -444,6 +444,12 @@ h3 .hint{font-size:0.9625rem;color:var(--faint);letter-spacing:.08em;
 /* Ada 26-Oct-2026 usage box: the projection rows grew it past the square,
    so text + row spacing shrink to fit all rows in the 300px panel. */
 .csquare.usage .btitle{font-size:1.05rem}
+/* Ada 17-Nov-2026 the tile's title carries the link to the plan editor (Matt's form). Quiet, so it
+   reads as a control beside the title rather than as part of it. */
+.csquare .btitle a.caplink{font-size:0.7rem;font-weight:400;letter-spacing:.06em;
+  text-transform:uppercase;color:var(--faint);text-decoration:none;
+  border-bottom:1px dotted var(--line);margin-left:.35rem;vertical-align:middle}
+.csquare .btitle a.caplink:hover{color:var(--info)}
 /* Ada 06-Nov-2026 the usage tile's level bars: one thin bar per service, a fill that carries
    the band colour, and a neutral grey when the tile has no attributable reading to draw.
    Ada 10-Nov-2026 neither bar draws a threshold tick any more (Matt, the SIM2 80% mark first and
@@ -1421,40 +1427,12 @@ function routerSection(r) {
        Starlink and the cellular connections, so it belongs with the router. The numbers
        come from a separate /usage endpoint; this is just the shell. -->
   <div class="csquare list usage">
-    <div class="btitle">usage</div>
+    <div class="btitle">usage <a class="caplink" href="caps.html">edit caps</a></div>
+    <!-- Ada 17-Nov-2026 the tip's prose moved out of this template literal (no backticks may
+         appear here) into capTipHTML(), which builds it from CAPS so the tip and the rows cannot
+         disagree: it was a hand-written copy of the plan and the billing day and had drifted. -->
     <span class="info" tabindex="0" role="button"
-          aria-label="About usage">i<span class="tip" role="tooltip">
-      <p><b>Two services, two cycles.</b> EvilDish (Starlink Roam 100 GB,
-        $55/mo) resets on the 25th and keeps working at <b>unlimited low-speed</b>
-        after 100 GB of high-speed &mdash; it never stops. SIM2 (RoamLink Flex 20,
-        $39/mo) resets on the 28th, banks unused data up to three cycles
-        (<b>60 GB</b> available at once), and is <b>suspended until the next
-        cycle</b> once everything is spent. So the dish runs out of speed and the
-        SIM runs out of service.</p>
-      <p><b>Levels.</b> EvilDish: green under 50 GB, amber 50&ndash;100 GB (half
-        the high-speed spent), red at 100 GB (low-speed from there). SIM2: amber
-        from 16 GB of 20, red at the 60 GB bank ceiling. Colour is a level, not a
-        throttle this page applies.</p>
-      <p><b>Attribution.</b> The dish&rsquo;s counters are <b>rolling</b>, so a
-        total is the sum of the counter&rsquo;s increases, never a reading. Two
-        terminals answer the same address, and the tile follows whichever wins the
-        route, so a period is only ever reported for the van&rsquo;s own kit. That
-        sum only starts when the kit is identified, so the rest of this cycle rests
-        on <b>Starlink&rsquo;s own figure for EvilDish</b>, not on a guess and not
-        on the other kit&rsquo;s bytes. No reading is what a blank dish row means
-        here, not a failure. SIM2 comes from the router&rsquo;s per-SIM counter,
-        which restarts when the module re-initialises; the carrier&rsquo;s portal
-        governs.</p>
-      <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that
-        expire unused. The two services differ: the dish&rsquo;s high-speed data does
-        <b>not</b> roll over, so whatever is left on the 24th is lost, while SIM2 banks
-        unused data for up to three cycles, so its remainder is not at risk until the
-        bank is full. A dash means the reading is missing, not that nothing is at risk.</p>
-      <p><b>What a GB costs.</b> EvilDish $0.55/GB ($55 / 100 GB); SIM2 $1.95/GB
-        fresh, $0.65/GB with the bank full; SIM1 (EIOT) $1.00/GB at 25 GB/30 d,
-        $2.15/GB at 60 GB/360 d. The dish is the cheapest place to put bulk and
-        the only one whose overflow is free.</p>
-    </span></span>
+          aria-label="About usage">i<span class="tip" role="tooltip" id="usage-tip"></span></span>
     <div class="r"><span class="k">EvilDish</span>
       <span class="v" id="usg-dish-level">&mdash;</span></div>
     <div class="r"><span class="k">Used</span>
@@ -1988,6 +1966,11 @@ async function load() {
     const el = $(id);
     if (el) el.innerHTML = keep[id];
   }
+  // Ada 17-Nov-2026 the usage tile's info tip is BUILT from the plan (capTipHTML), and it lives
+  // inside the router section this function rebuilds every 15s -- left alone it was wiped on each
+  // tick and the tile showed an empty tooltip. It is not in `keep` because it is rebuilt from CAPS,
+  // which is authoritative, rather than restored from the copy taken before the re-render.
+  fillCapTip();
   if (keepPlaceName) {
     const pn = $("#place-name");
     if (pn) pn.value = keepPlaceName;
@@ -2456,10 +2439,26 @@ function updateMap() {
 // EvilDish's numbers are only ever the van's own kit's: the tile follows the route and a second
 // terminal answers the same address, so /usage attributes per kit and reports null when it cannot.
 // An unattributable reading shows as "no reading" -- never as somebody else's traffic.
-const DISH_PLAN_GB = 100, DISH_WARN_GB = 50, DISH_USD_GB = 0.55;
-const SIM2_PLAN_GB = 20, SIM2_WARN_GB = 16, SIM2_BANK_GB = 60, SIM2_USD_GB = 1.95;
-const SIM2_ANCHOR_DAY = 28;            // the day RoamLink resets the cycle
+// Ada 17-Nov-2026 the caps, the warning levels, the $/GB and each cycle's start day come from the
+// plan the /caps endpoint serves (edited at caps.html). They used to be constants here AND in
+// serve-data.py AND in this tile's own tooltip, and the three had drifted -- the tip said one
+// billing day while the server billed on another. CAPS_DEFAULTS is what the tile draws until /caps
+// answers, and if it never does; it must match the server's CAPS_DEFAULTS, so a /caps outage cannot
+// silently change the numbers on screen.
+const CAPS_DEFAULTS = {
+  dish: {plan_gb: 100, warn_gb: 50, usd_gb: 0.55, billing_day: 25},
+  sim2: {plan_gb: 20, warn_gb: 16, bank_gb: 60, usd_gb: 1.95, billing_day: 28},
+};
+let CAPS = JSON.parse(JSON.stringify(CAPS_DEFAULTS));
+let LAST_USAGE = null;
+const CAPS_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/caps";
 const BYTES_GB = 1e9;
+
+// The warn level as a share of the cap, so the one-line status cannot say "50%" beside a warn level
+// that is now 60% of the plan (both are edited at caps.html).
+function capPct(svc) {
+  return svc.plan_gb ? Math.round((svc.warn_gb / svc.plan_gb) * 100) : 0;
+}
 
 // A band is a level, not an action this page takes. "idle" = nothing attributable to draw.
 // The colour lives on a CHILD span so it survives load()'s 15s re-render: keep/restore
@@ -2483,11 +2482,14 @@ const usageDayLocal = (d) => USAGE_DAY[d.getMonth()] + " " + d.getDate();
 // SIM2's cycle is the router's own anchor (day 28), in the router's local time -- the same day the
 // carrier resets on, which is what makes "days left" mean anything to a plan.
 function simCycle(now) {
-  let start = new Date(now.getFullYear(), now.getMonth(), SIM2_ANCHOR_DAY);
+  // Ada 17-Nov-2026 the anchor is the cell plan's own start day (from /caps), not a constant: the
+  // two services bill on different days and each one is editable at caps.html.
+  const day = CAPS.sim2.billing_day;
+  let start = new Date(now.getFullYear(), now.getMonth(), day);
   if (start.getTime() > now.getTime()) {
-    start = new Date(now.getFullYear(), now.getMonth() - 1, SIM2_ANCHOR_DAY);
+    start = new Date(now.getFullYear(), now.getMonth() - 1, day);
   }
-  const anchor = new Date(start.getFullYear(), start.getMonth() + 1, SIM2_ANCHOR_DAY);
+  const anchor = new Date(start.getFullYear(), start.getMonth() + 1, day);
   // the cycle runs 28th -> 27th, so the last day is the day before the next anchor
   const end = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - 1);
   return { start: start, end: end,
@@ -2498,12 +2500,12 @@ function renderUsage(u) {
   const txt = (id, v) => { const e = $(id); if (e) e.textContent = v; };
   const html = (id, v) => { const e = $(id); if (e) e.innerHTML = v; };
 
-  // ---- EvilDish: Starlink Roam 100 GB, cycle 25th -> 24th (the server's billing period) ----
+  // ---- EvilDish: the dish plan, on the server's billing period (both from /caps) ----
   const dishGB = (u && u.total != null) ? u.total / BYTES_GB : null;
-  const dishBand = usageBand(dishGB, DISH_WARN_GB, DISH_PLAN_GB);
-  html("usg-dish-level", usageLevel(dishGB == null ? 0 : (dishGB / DISH_PLAN_GB) * 100, dishBand));
+  const dishBand = usageBand(dishGB, CAPS.dish.warn_gb, CAPS.dish.plan_gb);
+  html("usg-dish-level", usageLevel(dishGB == null ? 0 : (dishGB / CAPS.dish.plan_gb) * 100, dishBand));
   txt("usg-dish-used", dishGB == null ? "no reading"
-    : dishGB.toFixed(1) + " of " + DISH_PLAN_GB + " GB");
+    : dishGB.toFixed(1) + " of " + CAPS.dish.plan_gb + " GB");
   txt("usg-dish-cycle", (u && u.period_start != null)
     ? usageDay(u.period_start) + " \u2192 " + usageDay(u.period_end) +
       (usageDaysText(u.days_left) ? " \u00b7 " + usageDaysText(u.days_left) : "")
@@ -2512,26 +2514,26 @@ function renderUsage(u) {
   // ---- SIM2: the router's own per-SIM meter, rolled across module re-inits (cycle 28th -> 27th)
   const s2 = (u && u.sim && u.sim["2"]) || null;
   const sim2GB = (s2 && s2.total_bytes != null) ? s2.total_bytes / BYTES_GB : null;
-  const sim2Band = usageBand(sim2GB, SIM2_WARN_GB, SIM2_BANK_GB);
+  const sim2Band = usageBand(sim2GB, CAPS.sim2.warn_gb, CAPS.sim2.bank_gb);
   // Ada 10-Nov-2026 neither bar draws a threshold mark any more (Matt: the SIM2 80% mark first,
   // then the dish's 50% one -- "a stray vertical white line"). On a nearly empty track a lone white
   // line read as an artifact rather than a scale; the bands still colour the fill. See usageLevel().
-  html("usg-sim-level", usageLevel(sim2GB == null ? 0 : (sim2GB / SIM2_PLAN_GB) * 100, sim2Band));
+  html("usg-sim-level", usageLevel(sim2GB == null ? 0 : (sim2GB / CAPS.sim2.plan_gb) * 100, sim2Band));
   txt("usg-sim-used", sim2GB == null ? "\u2014"
-    : sim2GB.toFixed(3) + " of " + SIM2_PLAN_GB + " GB");
+    : sim2GB.toFixed(3) + " of " + CAPS.sim2.plan_gb + " GB");
   const c = simCycle(new Date());
   txt("usg-sim-cycle", usageDayLocal(c.start) + " \u2192 " + usageDayLocal(c.end) +
     " \u00b7 " + usageDaysText(c.daysLeft));
-  txt("usg-cost", "$" + DISH_USD_GB.toFixed(2) + " dish \u00b7 $"
-    + SIM2_USD_GB.toFixed(2) + " cell");
+  txt("usg-cost", "$" + CAPS.dish.usd_gb.toFixed(2) + " dish \u00b7 $"
+    + CAPS.sim2.usd_gb.toFixed(2) + " cell");
 
   // ---- value at risk: the dollars of this cycle's allowance that expire unused ----
   // The dish's high-speed data does not roll over, so everything left on the 24th is lost.
   // SIM2 banks up to three cycles, so its remainder is only at risk past the bank ceiling.
   const dishRisk = dishGB == null ? null
-    : Math.max(0, DISH_PLAN_GB - dishGB) * DISH_USD_GB;
+    : Math.max(0, CAPS.dish.plan_gb - dishGB) * CAPS.dish.usd_gb;
   const sim2Risk = sim2GB == null ? null
-    : Math.max(0, sim2GB - SIM2_BANK_GB) * SIM2_USD_GB;
+    : Math.max(0, sim2GB - CAPS.sim2.bank_gb) * CAPS.sim2.usd_gb;
   const money = (v) => v == null ? "\u2014" : "$" + v.toFixed(2);
   txt("usg-risk", money(dishRisk) + " dish \u00b7 " + money(sim2Risk) + " cell");
 
@@ -2539,8 +2541,12 @@ function renderUsage(u) {
   let band = "ok", label = "";
   if (dishBand === "bad") { band = "bad"; label = "EvilDish on unlimited low-speed"; }
   else if (sim2Band === "bad") { band = "bad"; label = "SIM2 at the bank ceiling"; }
-  else if (dishBand === "warn") { band = "warn"; label = "EvilDish exceeds 50% allocation"; }
-  else if (sim2Band === "warn") { band = "warn"; label = "SIM2 past 80% of this cycle"; }
+  else if (dishBand === "warn") {
+    band = "warn"; label = "EvilDish exceeds " + capPct(CAPS.dish) + "% allocation";
+  }
+  else if (sim2Band === "warn") {
+    band = "warn"; label = "SIM2 past " + capPct(CAPS.sim2) + "% of this cycle";
+  }
   html("usg-status", label ? '<span class="' + band + '">' + esc(label) + "</span>" : "");
 }
 // Ada 24-Oct-2026 usage over the billing period (Matt). The dish's usage
@@ -2555,11 +2561,61 @@ const usageDay = (ts) => {
 const usageGB = (bytes) => bytes == null ? "&mdash;"
   : (bytes / 1e9).toFixed(2) + " GB";
 
+// Ada 17-Nov-2026 the tile's info tip, built from the plan the rows are drawn with. (No backticks
+// in the PANEL markup above; this function is outside it, so a template literal is fine here.)
+function ordinal(n) {
+  const s = ["th", "st", "nd", "rd"], v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+function capTipHTML() {
+  const d = CAPS.dish, c = CAPS.sim2;
+  const gb = (n) => (Math.round(n * 100) / 100);
+  const usd = (n) => "$" + n.toFixed(2);
+  const dishMo = "$" + (d.plan_gb * d.usd_gb).toFixed(0);
+  const bankUsd = usd(c.usd_gb * c.plan_gb / c.bank_gb);
+  return `
+      <p><b>Two services, two cycles.</b> EvilDish (Starlink Roam ${gb(d.plan_gb)} GB,
+        ${dishMo}/mo) resets on the ${ordinal(d.billing_day)} and keeps working at
+        <b>unlimited low-speed</b> after ${gb(d.plan_gb)} GB of high-speed &mdash; it never stops.
+        SIM2 (RoamLink Flex ${gb(c.plan_gb)}) resets on the ${ordinal(c.billing_day)}, banks unused
+        data up to three cycles (<b>${gb(c.bank_gb)} GB</b> available at once), and is
+        <b>suspended until the next cycle</b> once everything is spent. So the dish runs out of
+        speed and the SIM runs out of service.</p>
+      <p><b>Levels.</b> EvilDish: green under ${gb(d.warn_gb)} GB, amber
+        ${gb(d.warn_gb)}&ndash;${gb(d.plan_gb)} GB, red at ${gb(d.plan_gb)} GB (low-speed from
+        there). SIM2: amber from ${gb(c.warn_gb)} GB of ${gb(c.plan_gb)}, red at the
+        ${gb(c.bank_gb)} GB bank ceiling. Colour is a level, not a throttle this page applies.</p>
+      <p><b>Attribution.</b> The dish&rsquo;s counters are <b>rolling</b>, so a total is the sum of
+        the counter&rsquo;s increases, never a reading. Two terminals answer the same address, and the
+        tile follows whichever wins the route, so a period is only ever reported for the
+        van&rsquo;s own kit. That sum only starts when the kit is identified, so the rest of this
+        cycle rests on <b>Starlink&rsquo;s own figure for EvilDish</b>, not on a guess and not on the
+        other kit&rsquo;s bytes. No reading is what a blank dish row means here, not a failure. SIM2
+        comes from the router&rsquo;s per-SIM counter, which restarts when the module re-initialises;
+        the carrier&rsquo;s portal governs.</p>
+      <p><b>Value at risk</b> &mdash; the dollars of this cycle&rsquo;s allowance that expire unused.
+        The two services differ: the dish&rsquo;s high-speed data does <b>not</b> roll over, so
+        whatever is left on the ${ordinal(d.billing_day)} is lost, while SIM2 banks unused data for
+        up to three cycles, so its remainder is not at risk until the bank is full. A dash means the
+        reading is missing, not that nothing is at risk.</p>
+      <p><b>What a GB costs.</b> EvilDish ${usd(d.usd_gb)}/GB (${dishMo} / ${gb(d.plan_gb)} GB);
+        SIM2 ${usd(c.usd_gb)}/GB fresh, ${bankUsd}/GB with the bank full; SIM1 (EIOT) $1.00/GB at
+        25 GB/30 d, $2.15/GB at 60 GB/360 d. The dish is the cheapest place to put bulk and the only
+        one whose overflow is free.</p>
+      <p><b>Edit these.</b> The caps, the levels, the $/GB and each cycle&rsquo;s start day are
+        editable at <a href="caps.html">caps.html</a>.</p>`;
+}
+function fillCapTip() {
+  const el = $("usage-tip");
+  if (el) el.innerHTML = capTipHTML();
+}
+
 async function loadUsage() {
   try {
     const r = await fetch(USAGE_URL + "?t=" + Date.now(), { cache: "no-store" });
     const u = await r.json();
     if (!r.ok) throw new Error(u.error || ("HTTP " + r.status));
+    LAST_USAGE = u;
     renderUsage(u);
   } catch (e) {
     // Ada 06-Nov-2026 an unreachable /usage is not the same as "no reading": say nothing rather
@@ -2573,6 +2629,23 @@ async function loadUsage() {
       const el = $(id);
       if (el) el.textContent = "\u2014";
     }
+  }
+}
+
+// Ada 17-Nov-2026 the plan is fetched separately from /usage and re-rendered into the same rows: one
+// save at caps.html changes a cap without a page reload, and a /caps fetch that fails leaves the
+// last good numbers (or the defaults) on screen rather than blanking a tile that still has data.
+async function loadCaps() {
+  try {
+    const r = await fetch(CAPS_URL + "?t=" + Date.now(), { cache: "no-store" });
+    const d = await r.json();
+    if (r.ok && d && d.caps) {
+      CAPS = d.caps;
+      fillCapTip();
+      if (LAST_USAGE) renderUsage(LAST_USAGE);
+    }
+  } catch (e) {
+    // keep the last good plan: a /caps outage must not change the numbers on screen
   }
 }
 
@@ -2791,6 +2864,8 @@ document.addEventListener("keydown", (e) => {
 // that render: called alongside it they raced it and found no elements to write into.
 load().then(function () { loadPlaces(); loadSurvey(); }).catch(function () {});
 renderSky();
+fillCapTip();          // draw the tip from the defaults before /caps answers
+loadCaps();
 loadUsage();
 loadHistory();
 // Ada 06-Nov-2026 the footer div sits after this script, so wait for the DOM before filling it
@@ -2801,6 +2876,7 @@ if (document.readyState === "loading") {
 }
 setInterval(load, 15000);
 setInterval(loadUsage, 60000);
+setInterval(loadCaps, 60000);
 setInterval(loadPlaces, 60000);
 setInterval(loadSurvey, 60000);
 setInterval(loadHistory, 60000);

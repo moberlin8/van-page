@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<!-- ## Ada 17-Nov-2026 the usage-plan editor (Matt): "a page with a form ... that I can edit for
+     the data cap for Cell and Starlink ... [and] the billing period (start day)". The form reads
+     the plan from GET /caps and writes it back with POST /caps; serve-data.py owns the file
+     (/home/ada/van/var/caps.json) and both the /van tile and the server read it, so a save here
+     changes the tile on its next tick. Labels and the min/max of every field come from the server's
+     own ranges, so this page does not hold a second copy of the numbers. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>van &middot; data caps</title>
+<style>
+:root{
+  --bg:#1e293b; --panel:rgba(255,255,255,.05); --panel-hi:rgba(255,255,255,.10);
+  --line:rgba(148,163,184,.16); --ink:#fff; --title:#e2e8f0; --dim:#cbd5e1; --faint:#94a3b8;
+  --ok:#34d399; --warn:#fbbf24; --bad:#fb7185; --info:#38bdf8;
+  --font:'Plex Mono',ui-monospace,'Cascadia Mono',Menlo,Consolas,monospace;
+  --display:'Westminster',var(--font);
+}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--dim);font-family:var(--font);
+  font-size:.95rem;line-height:1.5;padding:2rem 1.25rem 4rem}
+.wrap{max-width:52rem;margin:0 auto}
+h1{font-family:var(--display);font-weight:400;color:var(--ink);font-size:1.6rem;
+  margin:0 0 .2rem;letter-spacing:.02em}
+h1 .sub{font-family:var(--font);font-size:.85rem;color:var(--faint);
+  text-transform:uppercase;letter-spacing:.16em;margin-left:.5rem}
+p.lede{color:var(--dim);margin:.4rem 0 1.4rem;max-width:44rem}
+a{color:var(--info)}
+.cards{display:grid;gap:1.25rem;grid-template-columns:repeat(auto-fit,minmax(21rem,1fr))}
+.card{background:var(--panel);border-radius:6px;padding:1.1rem 1.25rem 1.25rem}
+.card h2{font-size:1.05rem;color:var(--title);font-weight:700;margin:0 0 .15rem}
+.card .svc{font-size:.8rem;color:var(--faint);text-transform:uppercase;letter-spacing:.12em;
+  margin-bottom:.9rem}
+.row{display:flex;align-items:center;justify-content:space-between;gap:1rem;
+  padding:.42rem 0;border-bottom:1px solid var(--line)}
+.row:last-of-type{border-bottom:0}
+.row .k{color:var(--title)}
+.row .k .hint{display:block;font-size:.76rem;color:var(--faint)}
+.row input{width:8.5rem;text-align:right;background:rgba(15,23,42,.55);color:var(--ink);
+  border:1px solid var(--line);border-radius:4px;padding:.42rem .55rem;
+  font-family:var(--font);font-size:.95rem;font-variant-numeric:tabular-nums}
+.row input:focus{outline:2px solid #38bdf8;outline-offset:1px}
+.cycle{margin-top:.85rem;font-size:.82rem;color:var(--faint)}
+.cycle b{color:var(--dim);font-weight:600}
+.bar{position:relative;height:.4rem;border-radius:9999px;background:rgba(148,163,184,.22);
+  margin-top:.9rem;overflow:hidden}
+.bar .fill{position:absolute;inset:0 auto 0 0;border-radius:9999px;background:var(--ok);
+  transition:width .25s ease}
+.actions{display:flex;flex-wrap:wrap;gap:.7rem;align-items:center;margin-top:1.6rem}
+button{font-family:var(--font);font-size:.95rem;border-radius:5px;border:1px solid transparent;
+  padding:.55rem 1.05rem;cursor:pointer}
+button.primary{background:var(--info);color:#06202b;font-weight:700}
+button.ghost{background:transparent;color:var(--dim);border-color:var(--line)}
+button:disabled{opacity:.55;cursor:default}
+#status{margin-left:.2rem}
+#status.ok{color:var(--ok)} #status.bad{color:var(--bad)} #status.warn{color:var(--warn)}
+.note{margin-top:1.6rem;font-size:.8rem;color:var(--faint);max-width:44rem}
+code{color:var(--dim)}
+footer{margin-top:2rem;padding-top:.9rem;border-top:1px solid var(--line);
+  font-size:.8rem;color:var(--faint);display:flex;flex-wrap:wrap;gap:1rem;justify-content:space-between}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>data caps<span class="sub">van &middot; usage plan</span></h1>
+  <p class="lede">The cap, the warning level, the cost per GB and the day each cycle starts are set
+    here. Saving writes the plan to the server, and the usage tile on <a href="index.html">the van
+    page</a> picks it up on its next tick. The two services bill on different days, so each keeps
+    its own start day.</p>
+
+  <div class="cards" id="cards"></div>
+
+  <div class="actions">
+    <button class="primary" id="save">Save</button>
+    <button class="ghost" id="reset">Reset to defaults</button>
+    <span id="status"></span>
+  </div>
+
+  <p class="note" id="note"></p>
+
+  <footer>
+    <span><a href="index.html">&larr; van page</a></span>
+    <span><a href="history.html">history</a></span>
+    <span><a href="https://harlan.cinnamon-pinecone.ts.net:8888/">&larr; harlan dashboard</a></span>
+  </footer>
+</div>
+
+<script>
+// Ada 17-Nov-2026 the plan editor. Everything the form draws comes from GET /caps: the current
+// values, the defaults and the server's own min/max ranges, so a field cannot offer a value the
+// server would reject and the page holds no second copy of the numbers.
+var CAPS_URL = "https://harlan.cinnamon-pinecone.ts.net:8891/caps";
+var DEFAULTS = null;        // the server's built-in defaults, for the reset button
+var RANGES = null;          // {svc: {key: [min, max]}}
+var LOADED = null;          // the plan as the server last reported it
+
+// What each field means, in Matt's words. The order here is the order on the page.
+var FIELDS = {
+  dish: [
+    ["plan_gb", "Cap", "GB of high-speed per cycle"],
+    ["warn_gb", "Warn at", "amber from here"],
+    ["usd_gb", "Cost", "$ per GB"],
+    ["billing_day", "Cycle starts", "day of the month"]
+  ],
+  sim2: [
+    ["plan_gb", "Cap", "GB per cycle"],
+    ["warn_gb", "Warn at", "amber from here"],
+    ["bank_gb", "Bank ceiling", "GB banked, the red line"],
+    ["usd_gb", "Cost", "$ per GB"],
+    ["billing_day", "Cycle starts", "day of the month"]
+  ]
+};
+var SVC = {
+  dish: {name: "EvilDish", sub: "Starlink \u00b7 high-speed then unlimited low-speed"},
+  sim2: {name: "SIM2 cell", sub: "RoamLink \u00b7 suspended at the limit"}
+};
+var MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+
+function $(id) { return document.getElementById(id); }
+function setStatus(text, cls) {
+  var el = $("status");
+  el.textContent = text || "";
+  el.className = cls || "";
+}
+
+// The cycle a start day implies right now, so a changed day is visible before it is saved.
+function cycleFor(day, now) {
+  now = now || new Date();
+  var start = new Date(now.getFullYear(), now.getMonth(), day);
+  if (start.getTime() > now.getTime()) start = new Date(now.getFullYear(), now.getMonth() - 1, day);
+  var anchor = new Date(start.getFullYear(), start.getMonth() + 1, day);
+  var end = new Date(anchor.getFullYear(), anchor.getMonth(), anchor.getDate() - 1);
+  var daysLeft = Math.max(0, Math.ceil((anchor.getTime() - now.getTime()) / 86400000));
+  var fmt = function (d) { return MONTHS[d.getMonth()] + " " + d.getDate(); };
+  return fmt(start) + " \u2192 " + fmt(end) + " \u00b7 " +
+    (daysLeft === 0 ? "ends today" : daysLeft + (daysLeft === 1 ? " day" : " days") + " left");
+}
+
+function render(caps) {
+  LOADED = caps;
+  var host = $("cards");
+  host.innerHTML = "";
+  Object.keys(FIELDS).forEach(function (svc) {
+    var spec = SVC[svc];
+    var card = document.createElement("div");
+    card.className = "card";
+    var h = document.createElement("h2");
+    h.textContent = spec.name;
+    var s = document.createElement("div");
+    s.className = "svc";
+    s.textContent = spec.sub;
+    card.appendChild(h);
+    card.appendChild(s);
+
+    FIELDS[svc].forEach(function (f) {
+      var key = f[0], label = f[1], hint = f[2];
+      var range = (RANGES && RANGES[svc] && RANGES[svc][key]) || [0, 1e9];
+      var row = document.createElement("label");
+      row.className = "row";
+      var k = document.createElement("span");
+      k.className = "k";
+      k.textContent = label;
+      var hh = document.createElement("span");
+      hh.className = "hint";
+      hh.textContent = hint;
+      k.appendChild(hh);
+      var input = document.createElement("input");
+      input.type = "number";
+      input.id = "f-" + svc + "-" + key;
+      input.dataset.svc = svc;
+      input.dataset.key = key;
+      input.min = range[0];
+      input.max = range[1];
+      input.step = (key === "billing_day" || key === "plan_gb" || key === "warn_gb" ||
+                    key === "bank_gb") ? "1" : "0.01";
+      input.value = caps[svc][key];
+      input.addEventListener("input", function () { updateCycles(); });
+      row.appendChild(k);
+      row.appendChild(input);
+      card.appendChild(row);
+    });
+
+    var cy = document.createElement("div");
+    cy.className = "cycle";
+    cy.id = "cy-" + svc;
+    card.appendChild(cy);
+
+    // A bar of cap-vs-warn is not drawn here: the form edits the plan, and a level on a plan that
+    // has not been saved yet would be a different number from the tile's. The cycle line is the
+    // only live feedback this page owes.
+    host.appendChild(card);
+  });
+  updateCycles();
+}
+
+function updateCycles() {
+  Object.keys(FIELDS).forEach(function (svc) {
+    var el = $("cy-" + svc);
+    if (!el) return;
+    var day = parseInt(($("f-" + svc + "-billing_day") || {}).value, 10);
+    if (!(day >= 1 && day <= 28)) { el.innerHTML = "cycle: <b>enter a start day 1&ndash;28</b>"; return; }
+    el.innerHTML = "cycle: <b>" + cycleFor(day) + "</b>";
+  });
+}
+
+function collect() {
+  var out = {};
+  Object.keys(FIELDS).forEach(function (svc) {
+    out[svc] = {};
+    FIELDS[svc].forEach(function (f) {
+      var v = ($("f-" + svc + "-" + f[0]) || {}).value;
+      out[svc][f[0]] = v;
+    });
+  });
+  return out;
+}
+
+function load() {
+  setStatus("loading\u2026", "");
+  fetch(CAPS_URL + "?t=" + Date.now(), {cache: "no-store"})
+    .then(function (r) { return r.json().then(function (d) { return [r, d]; }); })
+    .then(function (pair) {
+      var r = pair[0], d = pair[1];
+      if (!r.ok || !d.caps) throw new Error((d && d.error) || ("HTTP " + r.status));
+      DEFAULTS = d.defaults;
+      RANGES = d.ranges;
+      render(d.caps);
+      $("note").innerHTML = "The plan is stored on harlan at <code>" + d.path +
+        "</code> and read by both the data server and the page. A save is live on the tile's next " +
+        "tick (it re-reads every 60s); hard-refresh the van page if you want it at once.";
+      setStatus("", "");
+    })
+    .catch(function (e) {
+      setStatus("cannot read the plan: " + e.message, "bad");
+      $("note").textContent = "The plan could not be loaded from the data server.";
+    });
+}
+
+function save() {
+  var btn = $("save");
+  btn.disabled = true;
+  setStatus("saving\u2026", "");
+  fetch(CAPS_URL, {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify(collect())
+  })
+    .then(function (r) { return r.json().then(function (d) { return [r, d]; }); })
+    .then(function (pair) {
+      var r = pair[0], d = pair[1];
+      if (!r.ok) throw new Error(d.error || ("HTTP " + r.status));
+      render(d.caps);                       // show what the server actually stored
+      setStatus("saved \u2014 the tile follows within a minute", "ok");
+    })
+    .catch(function (e) {
+      setStatus("not saved: " + e.message, "bad");
+    })
+    .finally(function () { btn.disabled = false; });
+}
+
+$("save").addEventListener("click", save);
+$("reset").addEventListener("click", function () {
+  if (!DEFAULTS) return;
+  render(JSON.parse(JSON.stringify(DEFAULTS)));
+  setStatus("defaults loaded \u2014 press Save to apply", "warn");
+});
+load();
+</script>
+</body>
+</html>
