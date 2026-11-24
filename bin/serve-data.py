@@ -786,8 +786,11 @@ CAPS_FILE = "/home/ada/van/var/caps.json"
 
 CAPS_DEFAULTS = {
     "version": 1,
-    "dish": {"plan_gb": 100.0, "warn_gb": 50.0, "usd_gb": 0.55, "billing_day": 25},
-    "sim2": {"plan_gb": 20.0, "warn_gb": 16.0, "bank_gb": 60.0, "usd_gb": 1.95, "billing_day": 28},
+    # ada 23-Nov-2026 realigned to the plans as Matt's Starlink account shows them: the dish is
+    # "Roam - 300GB" with the counter resetting on the 21st (was 100 GB / day 25 -- the tile warned
+    # at 17% of allowance). warn stays at Matt's 80% line. SIM2 plan is 40 GB after he bought +20.
+    "dish": {"plan_gb": 300.0, "warn_gb": 240.0, "usd_gb": 0.55, "billing_day": 21},
+    "sim2": {"plan_gb": 40.0, "warn_gb": 30.0, "bank_gb": 60.0, "usd_gb": 1.95, "billing_day": 28},
 }
 
 # (min, max) per field. billing_day stops at 28 because billing_period() builds the anchor with

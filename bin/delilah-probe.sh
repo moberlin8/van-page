@@ -350,4 +350,43 @@ printf ','
 s apn "$GLMODEM_APN"
 printf ','
 s iccid "$GLMODEM_ICCID"
+printf ','
+# ---- Ada 06-Nov-2026 per-SIM data accounting (plan §6/Task 4) ------------------
+# The counters GL keeps in /tmp and mirrors to flash; the module's own AT+QGDCNT (rx,tx); the
+# active slot; and the cycle anchor GL schedules the reset from.
+_readnum() { [ -f "$1" ] && tr -d ' \n\r' < "$1" || true; }
+s traffic_sim1 "$(_readnum /tmp/traffic_sim1)"
+printf ','
+s traffic_sim2 "$(_readnum /tmp/traffic_sim2)"
+printf ','
+s traffic_total_4g "$(_readnum /tmp/traffic_total_4g)"
+printf ','
+s qgdcnt "$(gl_modem -B 0001:01:00.0 AT 'AT+QGDCNT?' 2>/dev/null | tr -d '\r' | sed -n 's/.*+QGDCNT: *\([0-9]*,[0-9]*\).*/\1/p' | head -1)"
+printf ','
+s sim_slot "$(gl_modem -B 0001:01:00.0 AT 'AT+QUIMSLOT?' 2>/dev/null | tr -d '\r' | sed -n 's/.*+QUIMSLOT: *\([0-9][0-9]*\).*/\1/p' | head -1)"
+printf ','
+s sim1_enable "$(uci -q get glmodem.modem_0001_traffic_limit.sim1_enable)"
+printf ','
+s sim1_threshold "$(uci -q get glmodem.modem_0001_traffic_limit.sim1_threshold)"
+printf ','
+s sim2_enable "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_enable)"
+printf ','
+s sim2_threshold "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_threshold)"
+printf ','
+s sim2_reset_day "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_day)"
+printf ','
+s sim2_reset_hour "$(uci -q get glmodem.modem_0001_traffic_limit.sim2_hour)"
+printf ','
+# ---- Ada 06-Nov-2026 GPS track drain (plan §15k/§15l) -------------------------
+# $1 is the newest timestamp harlan already holds; everything after it is new. Bounded at 5000 rows
+# so a long outage cannot produce an unbounded reply - and 5000 rows is 83 hours of driving at the
+# 60s moving cadence, far more than any real gap. Empty fields become null rather than a bare comma,
+# because a malformed array would fail the whole poll rather than just the track.
+printf '"gps":['
+awk -F, -v t="${1:-}" '
+function j(v) { return (v == "" ? "null" : v) }
+NF >= 8 && $1 > t && n < 5000 {
+	printf "%s[\"%s\",%s,%s,%s,%s,%s,%s,%s]", (n++ ? "," : ""), $1, j($2), j($3), j($4), j($5), j($6), j($7), j($8)
+}' /overlay/gps/track*.csv 2>/dev/null
+printf ']'
 printf '}\n'
