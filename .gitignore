@@ -6,3 +6,9 @@ __pycache__/
 var/*.log
 data/*.db
 var/dismissed.json
+## Ada 24-Nov-2026  this repo is public, so keep three classes out of it:
+##   var/               runtime state, Delilah config backups (they contain /etc/shadow),
+##                      the vendor firmware image, the rollback private key
+##   the GL triage tool vendor tooling pulled from csa.gl-i.net - not ours to redistribute
+var/
+bin/gl-helper-triage-pruned-*.sh
